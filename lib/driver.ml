@@ -80,6 +80,14 @@ end
 let exec_main file =
   let open Soteria_c_lib in
   let open Syntaxes.Result in
+  Soteria.Logs.Config.set_and_lock
+    {
+      level = Some Smt;
+      always_log_smt = false;
+      no_color = false;
+      hide_unstable = false;
+      kind = Stderr;
+    };
   let mucore_file = Frontend.load_mucore_ast file in
   let+ main = Option.to_result ~none:"No main function" mucore_file.main in
   let main = Pmap.find main mucore_file.funs in
