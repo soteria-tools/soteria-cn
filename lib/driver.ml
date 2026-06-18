@@ -77,24 +77,12 @@ module Frontend = struct
         exit 1
 end
 
-let sym_is_id sym id =
-  let open Cerb_frontend.Symbol in
-  match sym with Symbol (_digest, _i, SD_Id id') -> id = id' | _ -> false
-
-let get_main (mucore : unit Cn.Mucore.file) =
-  let main_opt =
-    mucore.funs |> Pmap.bindings_list
-    |> List.find_opt (fun (sym, _) -> sym_is_id sym "main")
-  in
-  match main_opt with
-  | Some (_, main) -> Ok main
-  | None -> Error "No main function found"
-
 let exec_main file =
   let open Soteria_c_lib in
   let open Syntaxes.Result in
   let mucore_file = Frontend.load_mucore_ast file in
-  let+ main = get_main mucore_file in
+  let+ main = Option.to_result ~none:"No main function" mucore_file.main in
+  let main = Pmap.find main mucore_file.funs in
   let results =
     let computation = Minterp.exec_fun main [] in
     Csymex.run ~mode:OX computation

@@ -1,1 +1,2 @@
-(cram)
+(cram
+ (deps ../bin/main.exe))
