@@ -1,0 +1,4 @@
+(executable
+ (public_name soteria-cn)
+ (name main)
+ (libraries soteria_cn))

@@ -1,0 +1,3 @@
+(library
+ (name soteria_cn)
+ (libraries cn soteria cerberus-lib.frontend cerberus-lib.backend_common))
