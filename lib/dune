@@ -1,3 +1,8 @@
 (library
  (name soteria_cn)
- (libraries cn soteria cerberus-lib.frontend cerberus-lib.backend_common))
+ (libraries
+  cn
+  soteria
+  soteria-c
+  cerberus-lib.frontend
+  cerberus-lib.backend_common))
