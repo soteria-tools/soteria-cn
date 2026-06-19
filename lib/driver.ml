@@ -89,8 +89,9 @@ let exec_main file =
       kind = Stderr;
     };
   let mucore_file = Frontend.load_mucore_ast file in
-  let+ main = Option.to_result ~none:"No main function" mucore_file.main in
-  let main = Pmap.find main mucore_file.funs in
+  let umucore = Usable_mucore.of_mucore mucore_file in
+  let+ main = Option.to_result ~none:"No main function" umucore.main in
+  let main = Symbol_std.Map.find main umucore.funs in
   let results =
     let computation = Minterp.exec_fun main [] in
     Csymex.run ~mode:OX computation
