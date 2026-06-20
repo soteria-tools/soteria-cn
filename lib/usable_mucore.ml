@@ -189,7 +189,7 @@ and expr_ =
       * Cnstatement.statement Cnprog.t list
 
 (* Argument binders: a flat record of the two binder lists. The body is paired
-   with [arguments] at each use site (see {!args_and_body} and {!label_def}). *)
+   with [arguments] at each use site (see {!fun_map_decl} and {!label_def}). *)
 
 type logical_arg =
   | Define of Sym.t * IndexTerms.t
@@ -233,17 +233,13 @@ type label_def =
 
 type trusted = Trusted of Locations.t | Checked
 
-type args_and_body = {
-  args : arguments;
-  body : expr;
-  labels : label_def Sym.Map.t;
-  return_type : ReturnTypes.t;
-}
-
 type fun_map_decl =
   | Proc of {
       loc : Locations.t;
-      args_and_body : args_and_body;
+      args : arguments;
+      body : expr;
+      labels : label_def Sym.Map.t;
+      return_type : ReturnTypes.t;
       trusted : trusted;
     }
   | ProcDecl of Locations.t * ArgumentTypes.ft option
@@ -615,23 +611,20 @@ let pp_label_def ft = function
       Fmt.pf ft "@[<v 2>loop (invariant: %b):@ %a@ %a@]" info.has_invariant
         pp_arguments args pp_expr body
 
-let pp_args_and_body ft { args; body; labels; return_type } =
-  let pp_label ft (s, l) =
-    Fmt.pf ft "@[<v 2>%a:@ %a@]" pp_sym s pp_label_def l
-  in
-  Fmt.pf ft
-    "@[<v>@[<v 2>args:@ %a@]@ @[<2>returns:@ %a@]@ @[<v 2>body:@ %a@]@ @[<v \
-     2>labels:@ %a@]@]"
-    pp_arguments args pp_rt return_type pp_expr body
-    (Fmt.list ~sep:Fmt.cut pp_label)
-    (Sym.Map.bindings labels)
-
 let pp_fun_map_decl ft = function
-  | Proc { args_and_body; trusted; _ } ->
+  | Proc { args; body; labels; return_type; trusted; _ } ->
       let tag =
         match trusted with Trusted _ -> " (trusted)" | Checked -> ""
       in
-      Fmt.pf ft "@[<v 2>proc%s:@ %a@]" tag pp_args_and_body args_and_body
+      let pp_label ft (s, l) =
+        Fmt.pf ft "@[<v 2>%a:@ %a@]" pp_sym s pp_label_def l
+      in
+      Fmt.pf ft
+        "@[<v 2>proc%s:@ @[<v 2>args:@ %a@]@ @[<2>returns:@ %a@]@ @[<v 2>body:@ \
+         %a@]@ @[<v 2>labels:@ %a@]@]"
+        tag pp_arguments args pp_rt return_type pp_expr body
+        (Fmt.list ~sep:Fmt.cut pp_label)
+        (Sym.Map.bindings labels)
   | ProcDecl (_, _) -> Fmt.string ft "<proc decl>"
 
 let pp_globs ft = function
@@ -868,18 +861,18 @@ module Of_mucore = struct
             info = { condition_loc = l1; loop_loc = l2; has_invariant = b };
           }
 
-  let args_and_body (mu : unit Mu.args_and_body) : args_and_body =
-    let args, (e, labels, rt) = arguments (fun x -> x) mu in
-    {
-      args;
-      body = expr e;
-      labels = pmap_to_symmap label_def labels;
-      return_type = rt;
-    }
-
   let fun_map_decl = function
     | Mu.Proc { loc; args_and_body = ab; trusted = tr } ->
-        Proc { loc; args_and_body = args_and_body ab; trusted = trusted tr }
+        let args, (e, labels, rt) = arguments (fun x -> x) ab in
+        Proc
+          {
+            loc;
+            args;
+            body = expr e;
+            labels = pmap_to_symmap label_def labels;
+            return_type = rt;
+            trusted = trusted tr;
+          }
     | Mu.ProcDecl (loc, ft) -> ProcDecl (loc, ft)
 
   let globs = function
