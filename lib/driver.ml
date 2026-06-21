@@ -4,6 +4,7 @@ module CB = Cerb_backend
 open CB.Pipeline
 open Cn
 open Setup
+open Syntaxes.FunctionWrap
 
 module Frontend = struct
   (* Run Cerberus' C frontend and Core elaboration on [filename], then rewrite the
@@ -77,24 +78,25 @@ module Frontend = struct
         exit 1
 end
 
-let exec_main file =
+(* Helper for all main entry points *)
+let initialise ?soteria_config mode config f =
+  Option.iter Soteria.Config.set_and_lock soteria_config;
+  let@ () = Soteria_c_lib.Config.with_config ~config ~mode in
+  Soteria.Stats.As_ctx.with_dumped () f
+
+let exec_main config c_config fuel file =
   let open Soteria_c_lib in
   let open Syntaxes.Result in
-  Soteria.Logs.Config.set_and_lock
-    {
-      level = Some Smt;
-      always_log_smt = false;
-      no_color = false;
-      hide_unstable = false;
-      kind = Stderr;
-    };
+  let* file = Option.to_result ~none:"No input file provided" file in
+  let fuel = Soteria.Symex.Fuel_gauge.Cli.validate_or_exit fuel in
+  let@ () = initialise ~soteria_config:config Whole_program c_config in
   let mucore_file = Frontend.load_mucore_ast file in
   let umucore = Usable_mucore.of_mucore mucore_file in
   let+ main = Option.to_result ~none:"No main function" umucore.main in
   let main = Symbol_std.Map.find main umucore.funs in
   let results =
     let computation = Minterp.exec_fun main [] in
-    Csymex.Result.run ~mode:OX computation
+    Csymex.Result.run ~fuel ~mode:OX computation
   in
   Fmt.pr "Execution results: %a\n"
     Fmt.Dump.(
