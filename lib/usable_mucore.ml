@@ -409,6 +409,14 @@ let pp_dtree dtree = pp_pp (fun x -> CF.Pp_ast.pp_doc_tree (dtree x))
 let pp_cnstatement_prog = pp_dtree (Cnprog.dtree Cnstatement.dtree)
 let comma = Fmt.comma
 
+(* A delimited, comma-separated sequence with a leading soft break. When the
+   contents don't fit, they drop onto a line indented from the opening
+   delimiter rather than aligning under it (which marches off to the right as
+   nesting deepens); short sequences still print inline. The break attaches to
+   the caller's box, so call sites wrap these in their own [@[<2>...@]]. *)
+let pp_paren pp ft xs = Fmt.pf ft "(@,%a)" (Fmt.list ~sep:comma pp) xs
+let pp_bracket pp ft xs = Fmt.pf ft "[@,%a]" (Fmt.list ~sep:comma pp) xs
+
 let rec pp_value ft = function
   | Vobject ov -> pp_object_value ft ov
   | Vloaded lv -> pp_loaded_value ft lv
@@ -416,29 +424,28 @@ let rec pp_value ft = function
   | Vunit -> Fmt.string ft "unit"
   | Vtrue -> Fmt.string ft "true"
   | Vfalse -> Fmt.string ft "false"
-  | Vlist (_, vs) -> Fmt.pf ft "@[<2>[%a]@]" (Fmt.list ~sep:comma pp_value) vs
-  | Vtuple vs -> Fmt.pf ft "@[<2>(%a)@]" (Fmt.list ~sep:comma pp_value) vs
+  | Vlist (_, vs) -> Fmt.pf ft "@[<2>%a@]" (pp_bracket pp_value) vs
+  | Vtuple vs -> Fmt.pf ft "@[<2>%a@]" (pp_paren pp_value) vs
 
 and pp_object_value ft = function
   | OVinteger iv -> pp_integer_value ft iv
   | OVfloating fv -> pp_floating ft fv
   | OVpointer pv -> pp_pointer_value ft pv
-  | OVarray lvs ->
-      Fmt.pf ft "@[<2>array[%a]@]" (Fmt.list ~sep:comma pp_loaded_value) lvs
+  | OVarray lvs -> Fmt.pf ft "@[<2>array%a@]" (pp_bracket pp_loaded_value) lvs
   | OVstruct { tag; members } ->
       let pp_member ft (id, _, mv) =
         Fmt.pf ft "@[<2>.%a =@ %a@]" pp_id id pp_mem_value mv
       in
-      Fmt.pf ft "@[<2>struct %a {%a}@]" pp_sym tag
+      Fmt.pf ft "@[<2>struct %a {@,%a}@]" pp_sym tag
         (Fmt.list ~sep:comma pp_member)
         members
   | OVunion { tag; member; value } ->
-      Fmt.pf ft "@[<2>union %a {.%a =@ %a}@]" pp_sym tag pp_id member
+      Fmt.pf ft "@[<2>union %a {@,.%a =@ %a}@]" pp_sym tag pp_id member
         pp_mem_value value
 
 and pp_loaded_value ft = function
   | LVspecified ov -> pp_object_value ft ov
-  | LVunspecified ct -> Fmt.pf ft "@[<2>unspecified(%a)@]" pp_ctype ct
+  | LVunspecified ct -> Fmt.pf ft "@[<2>unspecified(@,%a)@]" pp_ctype ct
 
 let rec pp_pattern ft (p : pattern) = pp_pattern_ ft p.node
 
@@ -446,152 +453,205 @@ and pp_pattern_ ft = function
   | CaseBase (None, _) -> Fmt.string ft "_"
   | CaseBase (Some s, _) -> pp_sym ft s
   | CaseCtor (c, ps) ->
-      Fmt.pf ft "@[<2>%a(%a)@]" pp_ctor c (Fmt.list ~sep:comma pp_pattern) ps
+      Fmt.pf ft "@[<2>%a%a@]" pp_ctor c (pp_paren pp_pattern) ps
 
-let rec pp_pexpr ft (pe : pexpr) = pp_pexpr_ ft pe.node
-
-and pp_pexpr_ ft = function
+let rec pp_pexpr ft (pe : pexpr) =
+  match pe.node with
   | PEsym s -> pp_sym ft s
   | PEval v -> pp_value ft v
   | PEconstrained l ->
-      Fmt.pf ft "@[<2>constrained(%a)@]"
-        (Fmt.list ~sep:comma (fun ft (_, pe) -> pp_pexpr ft pe))
+      Fmt.pf ft "@[<2>constrained%a@]"
+        (pp_paren (fun ft (_, pe) -> pp_pexpr ft pe))
         l
   | PEundef (_, ub) -> Fmt.pf ft "@[<2>undef(%a)@]" pp_ub ub
-  | PEerror (s, pe) -> Fmt.pf ft "@[<2>error(%S,@ %a)@]" s pp_pexpr pe
-  | PEctor (c, pes) ->
-      Fmt.pf ft "@[<2>%a(%a)@]" pp_ctor c (Fmt.list ~sep:comma pp_pexpr) pes
+  | PEerror (s, pe) -> Fmt.pf ft "@[<2>error(@,%S,@ %a)@]" s pp_pexpr pe
+  | PEctor (c, pes) -> Fmt.pf ft "@[<2>%a%a@]" pp_ctor c (pp_paren pp_pexpr) pes
   | PEmember_shift { ptr; tag; member } ->
-      Fmt.pf ft "@[<2>member_shift(%a,@ %a.%a)@]" pp_pexpr ptr pp_sym tag pp_id
-        member
+      Fmt.pf ft "@[<2>member_shift(@,%a,@ %a.%a)@]" pp_pexpr ptr pp_sym tag
+        pp_id member
   | PEarray_shift { base; ty; index } ->
-      Fmt.pf ft "@[<2>array_shift(%a : %a,@ %a)@]" pp_pexpr base pp_sct ty
+      Fmt.pf ft "@[<2>array_shift(@,%a : %a,@ %a)@]" pp_pexpr base pp_sct ty
         pp_pexpr index
   | PEcatch_exceptional_condition { iop; lhs; rhs; _ } ->
-      Fmt.pf ft "@[<2>catch(%a %a@ %a)@]" pp_pexpr lhs pp_iop iop pp_pexpr rhs
+      Fmt.pf ft "@[<2>catch(@,%a %a@ %a)@]" pp_pexpr lhs pp_iop iop pp_pexpr rhs
   | PEwrapI { iop; lhs; rhs; _ } ->
-      Fmt.pf ft "@[<2>wrapI(%a %a@ %a)@]" pp_pexpr lhs pp_iop iop pp_pexpr rhs
+      Fmt.pf ft "@[<2>wrapI(@,%a %a@ %a)@]" pp_pexpr lhs pp_iop iop pp_pexpr rhs
   | PEmemop (m, pe) ->
-      Fmt.pf ft "@[<2>memop(%a,@ %a)@]" pp_pure_memop m pp_pexpr pe
-  | PEnot pe -> Fmt.pf ft "@[<2>not(%a)@]" pp_pexpr pe
+      Fmt.pf ft "@[<2>memop(@,%a,@ %a)@]" pp_pure_memop m pp_pexpr pe
+  | PEnot pe -> Fmt.pf ft "@[<2>not(@,%a)@]" pp_pexpr pe
   | PEop { op; lhs; rhs } ->
       Fmt.pf ft "@[<2>(%a %a@ %a)@]" pp_pexpr lhs pp_binop op pp_pexpr rhs
   | PEconv_int { ty; arg } ->
-      Fmt.pf ft "@[<2>conv_int(%a,@ %a)@]" pp_pexpr ty pp_pexpr arg
+      Fmt.pf ft "@[<2>conv_int(@,%a,@ %a)@]" pp_pexpr ty pp_pexpr arg
   | PEstruct (tag, members) ->
       let pp_member ft (id, pe) =
         Fmt.pf ft "@[<2>.%a =@ %a@]" pp_id id pp_pexpr pe
       in
-      Fmt.pf ft "@[<2>struct %a {%a}@]" pp_sym tag
+      Fmt.pf ft "@[<2>struct %a {@,%a}@]" pp_sym tag
         (Fmt.list ~sep:comma pp_member)
         members
   | PEunion { tag; member; value } ->
-      Fmt.pf ft "@[<2>union %a {.%a =@ %a}@]" pp_sym tag pp_id member pp_pexpr
+      Fmt.pf ft "@[<2>union %a {@,.%a =@ %a}@]" pp_sym tag pp_id member pp_pexpr
         value
-  | PEcfunction pe -> Fmt.pf ft "@[<2>cfunction(%a)@]" pp_pexpr pe
+  | PEcfunction pe -> Fmt.pf ft "@[<2>cfunction(@,%a)@]" pp_pexpr pe
   | PEmemberof { tag; member; value } ->
-      Fmt.pf ft "@[<2>memberof(%a.%a,@ %a)@]" pp_sym tag pp_id member pp_pexpr
+      Fmt.pf ft "@[<2>memberof(@,%a.%a,@ %a)@]" pp_sym tag pp_id member pp_pexpr
         value
   | PEcall (name, pes) ->
-      Fmt.pf ft "@[<2>%a(%a)@]" pp_name name (Fmt.list ~sep:comma pp_pexpr) pes
-  | PElet { pat; value; body } ->
-      Fmt.pf ft "@[<v>@[<2>let %a =@ %a@] in@ %a@]" pp_pattern pat pp_pexpr
-        value pp_pexpr body
-  | PEif { cond; then_; else_ } ->
-      Fmt.pf ft "@[<v>@[<2>if %a then@ %a@]@ @[<2>else@ %a@]@]" pp_pexpr cond
-        pp_pexpr then_ pp_pexpr else_
+      Fmt.pf ft "@[<2>%a%a@]" pp_name name (pp_paren pp_pexpr) pes
+  | PElet _ -> pp_plet ft pe
+  | PEif { cond; then_; else_ } -> pp_pif ft cond then_ else_
   | PEare_compatible { left; right } ->
-      Fmt.pf ft "@[<2>are_compatible(%a,@ %a)@]" pp_pexpr left pp_pexpr right
+      Fmt.pf ft "@[<2>are_compatible(@,%a,@ %a)@]" pp_pexpr left pp_pexpr right
+
+(* Flatten a chain of [PElet]s — including bindings nested inside a bound value
+   — into a flat list of statements plus the final tail. Hoisting the value's
+   own bindings out preserves evaluation order while keeping the indentation
+   flat instead of marching to the right. *)
+and flatten_plet (pe : pexpr) : (pattern * pexpr) list * pexpr =
+  match pe.node with
+  | PElet { pat; value; body } ->
+      let vstmts, vtail = flatten_plet value in
+      let bstmts, tail = flatten_plet body in
+      (vstmts @ ((pat, vtail) :: bstmts), tail)
+  | _ -> ([], pe)
+
+and pp_plet ft pe =
+  let stmts, tail = flatten_plet pe in
+  let pp_stmt ft (pat, value) =
+    Fmt.pf ft "@[<2>let %a =@ %a@] in" pp_pattern pat pp_pexpr value
+  in
+  Fmt.pf ft "@[<v>%a@,%a@]" (Fmt.list ~sep:Fmt.cut pp_stmt) stmts pp_pexpr tail
+
+(* Render a conditional as an [else if] ladder rather than nesting each [else]
+   branch one indentation level deeper. *)
+and pp_pif ft cond then_ else_ =
+  Fmt.pf ft "@[<v>@[<2>if %a then@ %a@]@ %a@]" pp_pexpr cond pp_pexpr then_
+    pp_pelse else_
+
+and pp_pelse ft (pe : pexpr) =
+  match pe.node with
+  | PEif { cond; then_; else_ } ->
+      Fmt.pf ft "@[<2>else if %a then@ %a@]@ %a" pp_pexpr cond pp_pexpr then_
+        pp_pelse else_
+  | _ -> Fmt.pf ft "@[<2>else@ %a@]" pp_pexpr pe
 
 let pp_act ft (a : act) = pp_sct ft a.node
 
 let pp_action_ ft = function
   | Create { align; ty; _ } ->
-      Fmt.pf ft "@[<2>create(%a,@ %a)@]" pp_pexpr align pp_act ty
+      Fmt.pf ft "@[<2>create(@,%a,@ %a)@]" pp_pexpr align pp_act ty
   | CreateReadOnly { align; ty; init; _ } ->
-      Fmt.pf ft "@[<2>create_readonly(%a,@ %a,@ %a)@]" pp_pexpr align pp_act ty
-        pp_pexpr init
+      Fmt.pf ft "@[<2>create_readonly(@,%a,@ %a,@ %a)@]" pp_pexpr align pp_act
+        ty pp_pexpr init
   | Alloc { align; size; _ } ->
-      Fmt.pf ft "@[<2>alloc(%a,@ %a)@]" pp_pexpr align pp_pexpr size
-  | Kill (Dynamic, pe) -> Fmt.pf ft "@[<2>kill(dynamic,@ %a)@]" pp_pexpr pe
+      Fmt.pf ft "@[<2>alloc(@,%a,@ %a)@]" pp_pexpr align pp_pexpr size
+  | Kill (Dynamic, pe) -> Fmt.pf ft "@[<2>kill(@,dynamic,@ %a)@]" pp_pexpr pe
   | Kill (Static ct, pe) ->
-      Fmt.pf ft "@[<2>kill(%a,@ %a)@]" pp_sct ct pp_pexpr pe
+      Fmt.pf ft "@[<2>kill(@,%a,@ %a)@]" pp_sct ct pp_pexpr pe
   | Store { is_locking; ty; ptr; value; mo } ->
-      Fmt.pf ft "@[<2>store%s(%a,@ %a,@ %a,@ %a)@]"
+      Fmt.pf ft "@[<2>store%s(@,%a,@ %a,@ %a,@ %a)@]"
         (if is_locking then "_lock" else "")
         pp_act ty pp_pexpr ptr pp_pexpr value pp_memory_order mo
   | Load { ty; ptr; mo } ->
-      Fmt.pf ft "@[<2>load(%a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
+      Fmt.pf ft "@[<2>load(@,%a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
         pp_memory_order mo
   | RMW { ty; ptr; expected; desired; mo_success; mo_failure } ->
-      Fmt.pf ft "@[<2>rmw(%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
-        pp_pexpr expected pp_pexpr desired pp_memory_order mo_success
+      Fmt.pf ft "@[<2>rmw(@,%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr
+        ptr pp_pexpr expected pp_pexpr desired pp_memory_order mo_success
         pp_memory_order mo_failure
-  | Fence mo -> Fmt.pf ft "@[<2>fence(%a)@]" pp_memory_order mo
+  | Fence mo -> Fmt.pf ft "@[<2>fence(@,%a)@]" pp_memory_order mo
   | CompareExchangeStrong { ty; ptr; expected; desired; mo_success; mo_failure }
     ->
-      Fmt.pf ft "@[<2>cmpxchg_strong(%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty
+      Fmt.pf ft "@[<2>cmpxchg_strong(@,%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty
         pp_pexpr ptr pp_pexpr expected pp_pexpr desired pp_memory_order
         mo_success pp_memory_order mo_failure
   | CompareExchangeWeak { ty; ptr; expected; desired; mo_success; mo_failure }
     ->
-      Fmt.pf ft "@[<2>cmpxchg_weak(%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty
+      Fmt.pf ft "@[<2>cmpxchg_weak(@,%a,@ %a,@ %a,@ %a,@ %a,@ %a)@]" pp_act ty
         pp_pexpr ptr pp_pexpr expected pp_pexpr desired pp_memory_order
         mo_success pp_memory_order mo_failure
-  | LinuxFence mo -> Fmt.pf ft "@[<2>linux_fence(%a)@]" pp_linux_memory_order mo
+  | LinuxFence mo ->
+      Fmt.pf ft "@[<2>linux_fence(@,%a)@]" pp_linux_memory_order mo
   | LinuxLoad { ty; ptr; mo } ->
-      Fmt.pf ft "@[<2>linux_load(%a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
+      Fmt.pf ft "@[<2>linux_load(@,%a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
         pp_linux_memory_order mo
   | LinuxStore { ty; ptr; value; mo } ->
-      Fmt.pf ft "@[<2>linux_store(%a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
+      Fmt.pf ft "@[<2>linux_store(@,%a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
         pp_pexpr value pp_linux_memory_order mo
   | LinuxRMW { ty; ptr; value; mo } ->
-      Fmt.pf ft "@[<2>linux_rmw(%a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
+      Fmt.pf ft "@[<2>linux_rmw(@,%a,@ %a,@ %a,@ %a)@]" pp_act ty pp_pexpr ptr
         pp_pexpr value pp_linux_memory_order mo
 
 let pp_action ft (a : action) =
   let prefix = match a.polarity with Pos -> "" | Neg -> "neg " in
   Fmt.pf ft "%s%a" prefix pp_action_ a.action
 
-let rec pp_expr ft (e : expr) = pp_expr_ ft e.node
-
-and pp_expr_ ft = function
-  | Epure pe -> Fmt.pf ft "@[<2>pure(%a)@]" pp_pexpr pe
+let rec pp_expr ft (e : expr) =
+  match e.node with
+  | Epure pe -> Fmt.pf ft "@[<2>pure(@,%a)@]" pp_pexpr pe
   | Ememop (m, pes) ->
-      Fmt.pf ft "@[<2>memop(%a,@ %a)@]" pp_memop m
+      Fmt.pf ft "@[<2>memop(@,%a,@ %a)@]" pp_memop m
         (Fmt.list ~sep:comma pp_pexpr)
         pes
   | Eaction a -> pp_action ft a
   | Eskip -> Fmt.string ft "skip"
   | Eccall { ty; fn; args; _ } ->
-      Fmt.pf ft "@[<2>ccall(%a : %a)(%a)@]" pp_pexpr fn pp_act ty
-        (Fmt.list ~sep:comma pp_pexpr)
-        args
+      Fmt.pf ft "@[<2>ccall(%a : %a)%a@]" pp_pexpr fn pp_act ty
+        (pp_paren pp_pexpr) args
   | Eproc (name, pes) ->
-      Fmt.pf ft "@[<2>proc %a(%a)@]" pp_name name
-        (Fmt.list ~sep:comma pp_pexpr)
-        pes
-  | Elet { pat; value; body } ->
-      Fmt.pf ft "@[<v>@[<2>let %a =@ %a@] in@ %a@]" pp_pattern pat pp_pexpr
-        value pp_expr body
-  | Eunseq es -> Fmt.pf ft "@[<2>unseq(%a)@]" (Fmt.list ~sep:comma pp_expr) es
-  | Ewseq { pat; value; body } ->
-      Fmt.pf ft "@[<v>@[<2>let weak %a =@ %a@] in@ %a@]" pp_pattern pat pp_expr
-        value pp_expr body
-  | Esseq { pat; value; body } ->
-      Fmt.pf ft "@[<v>@[<2>let strong %a =@ %a@] in@ %a@]" pp_pattern pat
-        pp_expr value pp_expr body
-  | Eif { cond; then_; else_ } ->
-      Fmt.pf ft "@[<v>@[<2>if %a then@ %a@]@ @[<2>else@ %a@]@]" pp_pexpr cond
-        pp_expr then_ pp_expr else_
-  | Ebound e -> Fmt.pf ft "@[<2>bound(%a)@]" pp_expr e
-  | End es -> Fmt.pf ft "@[<2>nd(%a)@]" (Fmt.list ~sep:comma pp_expr) es
+      Fmt.pf ft "@[<2>proc %a%a@]" pp_name name (pp_paren pp_pexpr) pes
+  | Elet _ | Ewseq _ | Esseq _ -> pp_eseq ft e
+  | Eunseq es -> Fmt.pf ft "@[<2>unseq%a@]" (pp_paren pp_expr) es
+  | Eif { cond; then_; else_ } -> pp_eif ft cond then_ else_
+  | Ebound e -> Fmt.pf ft "@[<2>bound(@,%a)@]" pp_expr e
+  | End es -> Fmt.pf ft "@[<2>nd%a@]" (pp_paren pp_expr) es
   | Erun (s, pes) ->
-      Fmt.pf ft "@[<2>run %a(%a)@]" pp_sym s (Fmt.list ~sep:comma pp_pexpr) pes
+      Fmt.pf ft "@[<2>run %a%a@]" pp_sym s (pp_paren pp_pexpr) pes
   | CN_progs (_, progs) ->
-      Fmt.pf ft "@[<2>cn_progs[%a]@]"
-        (Fmt.list ~sep:comma pp_cnstatement_prog)
-        progs
+      Fmt.pf ft "@[<2>cn_progs%a@]" (pp_bracket pp_cnstatement_prog) progs
+
+(* Flatten a chain of sequenced bindings ([Elet]/[Ewseq]/[Esseq]) into a flat
+   list of statements plus the final tail. Bindings nested in a bound value are
+   hoisted out (faithful to the evaluation order, since the value must be fully
+   evaluated before it is bound), so a deeply left-nested sequence prints as a
+   flat block rather than a rightward staircase. [Eunseq] and other compound
+   forms are kept intact and indented within their own value. *)
+and flatten_eseq (e : expr) :
+    (string * pattern * [ `P of pexpr | `E of expr ]) list * expr =
+  match e.node with
+  | Elet { pat; value; body } ->
+      let bstmts, tail = flatten_eseq body in
+      (("", pat, `P value) :: bstmts, tail)
+  | Ewseq { pat; value; body } -> flatten_eseq_value "weak " pat value body
+  | Esseq { pat; value; body } -> flatten_eseq_value "strong " pat value body
+  | _ -> ([], e)
+
+and flatten_eseq_value kw pat value body =
+  let vstmts, vtail = flatten_eseq value in
+  let bstmts, tail = flatten_eseq body in
+  (vstmts @ ((kw, pat, `E vtail) :: bstmts), tail)
+
+and pp_eseq ft e =
+  let stmts, tail = flatten_eseq e in
+  let pp_bound ft = function `P pe -> pp_pexpr ft pe | `E e -> pp_expr ft e in
+  let pp_stmt ft (kw, pat, value) =
+    Fmt.pf ft "@[<2>let %s%a =@ %a@] in" kw pp_pattern pat pp_bound value
+  in
+  Fmt.pf ft "@[<v>%a@,%a@]" (Fmt.list ~sep:Fmt.cut pp_stmt) stmts pp_expr tail
+
+(* Render a conditional as an [else if] ladder rather than nesting each [else]
+   branch one indentation level deeper. *)
+and pp_eif ft cond then_ else_ =
+  Fmt.pf ft "@[<v>@[<2>if %a then@ %a@]@ %a@]" pp_pexpr cond pp_expr then_
+    pp_eelse else_
+
+and pp_eelse ft (e : expr) =
+  match e.node with
+  | Eif { cond; then_; else_ } ->
+      Fmt.pf ft "@[<2>else if %a then@ %a@]@ %a" pp_pexpr cond pp_expr then_
+        pp_eelse else_
+  | _ -> Fmt.pf ft "@[<2>else@ %a@]" pp_expr e
 
 let pp_logical_arg ft = function
   | Define (s, it) -> Fmt.pf ft "@[<2>let %a =@ %a@]" pp_sym s pp_it it
