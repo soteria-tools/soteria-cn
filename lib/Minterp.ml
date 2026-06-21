@@ -67,6 +67,14 @@ module Subst = struct
               Mu.pp_ctor ctor Core_value.pp v
               (Fmt.Dump.list Mu.pp_pattern)
               pats)
+
+  let from_args (args : Mu.arguments) (params : Core_value.t list) : t =
+    List.fold_left2
+      (fun acc ((arg, _) : Mu.computational_arg * _) param ->
+        match arg with
+        | Computational (sym, _) -> add sym param acc
+        | Ghost _ -> L.failwith "Unsupported ghost arguments")
+      empty args.comp params
 end
 
 let sym_is_id sym id =
@@ -74,9 +82,8 @@ let sym_is_id sym id =
   match sym with Symbol (_digest, _i, SD_Id id') -> id = id' | _ -> false
 
 let stop_if_unsupported (args : arguments) (trusted : trusted) =
-  if List.is_empty args.comp && List.is_empty args.logic && trusted = Checked
-  then return ()
-  else not_impl "exec_fn: function is either trusted or has arguments."
+  if List.is_empty args.logic && trusted = Checked then return ()
+  else not_impl "exec_fn: function is either trusted or has logic arguments."
 
 let eval_impl_call (i : CF.Implementation.implementation_constant)
     (args : Core_value.t list) : (Core_value.t, _, _) Csymex.Result.t =
@@ -87,6 +94,17 @@ let eval_pe_call (sym : Sym.t) (args : Core_value.t list) :
   match (sym, args) with
   | Symbol (_, _, SD_Id ("conv_loaded_int" | "conv_int")), [ _; i ] ->
       Result.ok i
+  | Symbol (_, _, SD_Id "params_length"), [ Tuple l ] ->
+      Result.ok @@ Core_value.c_int (List.length l)
+  | ( Symbol (_, _, SD_Id "params_nth"),
+      [ Tuple l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
+      let* i =
+        Typed.BitVec.to_z i
+        |> Csymex.of_opt_not_impl
+             ~msg:"params_nth: index is not a concrete integer"
+      in
+      let i = Z.to_int i in
+      Result.ok @@ List.nth l i
   | _ -> Fmt.kstr not_impl "unsupported pe call: %a" Sym.pp sym
 
 let eval_ctor (ctor : CF.Core.ctor) (v : Core_value.t list) :
@@ -120,37 +138,26 @@ let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
   | _ -> Fmt.kstr not_impl "unsupported iop"
 
 let cfunction (v : Core_value.t) =
-  (* Cerberus implementation *)
-  (*
-   match Pmap.lookup sym core.funinfo with
-   | Some (_, _, ret, params, is_variadic, has_proto) ->
-       get_env () >>= fun env ->
-       let toint b =
-         ATexpr (Texpr1.cst env (Coeff.s_of_int (if b then 1 else 0)))
-       in
-       return
-       @@ ATtuple
-            [
-              ATctype ret;
-              ATtuple (List.map (fun (_, ty) -> ATctype ty) params);
-              toint is_variadic;
-              toint has_proto;
-            ]
-   | None -> assert false
-  *)
   let* sym =
     match v with
-    | Fn sym -> Csymex.return sym
-    | _ -> Csymex.not_impl "cfunction: value is not a function"
+    | Obj (Fn sym) | Loaded (Spec (Fn sym)) -> Csymex.return sym
+    | _ ->
+        Fmt.kstr not_impl "cfunction: value is not a function: %a" Core_value.pp
+          v
   in
   let prog = Ctx.get_prog () in
-  let+ fn =
-    Sym.Map.find_opt sym prog.funs
+  let* fn =
+    Sym.Map.find_opt sym prog.call_funinfo
     |> Csymex.of_opt_not_impl ~msg:"cfunction: function not found in program"
   in
-  match fn with
-  | ProcDecl _ -> Csymex.not_impl "cfunction: function is a ProcDecl"
-  | Proc { return_type; args; _ } -> Csymex.not_impl "cfunction: proc"
+  Result.ok (Core_value.cfunction fn)
+
+let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
+  let open Core_value in
+  match op with
+  | OpEq -> Result.ok (Bool (sem_eq lhs rhs))
+  | OpOr -> Result.ok @@ Core_value.Bool.or_ lhs rhs
+  | _ -> Fmt.kstr not_impl "eval_op: unsupported operator: %a" Mu.pp_binop op
 
 let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
@@ -158,7 +165,9 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   match pexpr.node with
   | PEsym sym -> Result.ok (Subst.find sym subst)
   | PEval v -> Result.ok (Core_value.of_mu v)
-  | PEcfunction pe -> eval_pexpr subst pe
+  | PEcfunction pe ->
+      let** f = eval_pexpr subst pe in
+      cfunction f
   | PEundef (_, ub) -> Result.error "UB"
   | PEcall (generic_name, args) -> (
       let** args = Result.map_list ~f:(eval_pexpr subst) args in
@@ -179,20 +188,46 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
       let** rhs = Core_value.cast_int rhs in
       let++ res = eval_iop ~int_ty iop lhs rhs in
       Core_value.Obj (Core_value.Int res)
+  | PEnot e ->
+      let++ b = eval_pexpr subst e in
+      Core_value.Bool.not b
+  | PEop { op; lhs; rhs } ->
+      let** lhs = eval_pexpr subst lhs in
+      let** rhs = eval_pexpr subst rhs in
+      eval_op op lhs rhs
+  | PEare_compatible { left; right } ->
+      (* Deeply uninteresting but I guess we have to implement that... *)
+      let** left = eval_pexpr subst left in
+      let** left = Core_value.cast_type left in
+      let** right = eval_pexpr subst right in
+      let** right = Core_value.cast_type right in
+      let res =
+        CF.AilTypesAux.are_compatible
+          (CF.Ctype.no_qualifiers, left)
+          (CF.Ctype.no_qualifiers, right)
+      in
+      Result.ok (Core_value.Bool.of_bool res)
+  | PEif { cond; then_; else_ } ->
+      let** guard = eval_pexpr subst cond in
+      let guard = Core_value.Bool.to_sbool guard in
+      if%sat guard then eval_pexpr subst then_ else eval_pexpr subst else_
   | PEconstrained _ -> not_impl "PEconstrainted"
   | PEerror _ -> not_impl "PEerror"
   | PEmember_shift _ -> not_impl "PEmember_shift"
   | PEarray_shift _ -> not_impl "PEarray_shift"
   | PEwrapI _ -> not_impl "PEwrapI"
   | PEmemop _ -> not_impl "PEmemop"
-  | PEnot _ -> not_impl "PEnot"
-  | PEop _ -> not_impl "PEop"
   | PEconv_int _ -> not_impl "PEconv_int"
   | PEstruct _ -> not_impl "PEstruct"
   | PEunion _ -> not_impl "PEunion"
   | PEmemberof _ -> not_impl "PEmemberof"
-  | PEif _ -> not_impl "PEif"
-  | PEare_compatible _ -> not_impl "PEare_compatible"
+
+let eval_action (subst : Subst.t) (action : action) :
+    (Core_value.t, _, _) Result.t =
+  let@@ () = Csymex.with_loc ~loc:action.loc in
+  match action.action with
+  | Create { align; ty; prefix = _ } -> Fmt.kstr not_impl "create prefix"
+  | _ -> Fmt.kstr not_impl "Unsupported action: %a" Mu.pp_action action
 
 let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
     (body : expr) : Core_value.t ExprM.t =
@@ -228,15 +263,34 @@ let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
           Fmt.kstr not_impl "Return label with multiple values: %a" Sym.pp lab
       | Non_inlined _, _ -> Fmt.kstr not_impl "Non-inlined label: %a" Sym.pp lab
       | Loop _, _ -> Fmt.kstr not_impl "Loop label: %a" Sym.pp lab)
+  | Eif { cond; then_; else_ } ->
+      let** guard = eval_pexpr subst cond in
+      let guard = Core_value.Bool.to_sbool guard in
+      if%sat guard then eval_expr ~labels subst then_
+      else eval_expr ~labels subst else_
+  | Eccall { ty; fn; args; specs = _ } -> (
+      let** fn = eval_pexpr subst fn in
+      let** args = Result.map_list ~f:(eval_pexpr subst) args in
+      match fn with
+      | Obj (Fn sym) | Loaded (Spec (Fn sym)) ->
+          let prog = Ctx.get_prog () in
+          let fn = Sym.Map.find sym prog.funs in
+          let++ v = exec_fun fn args in
+          Normal v
+      | _ -> Fmt.kstr not_impl "Dynamic call %a" Core_value.pp fn)
+  | Eaction action ->
+      let++ v = eval_action subst action in
+      Normal v
   | _ -> Fmt.kstr not_impl "Unsupported expr: %a" Mu.pp_expr body
 
-let exec_fun (fn : Mu.fun_map_decl) params =
+and exec_fun (fn : Mu.fun_map_decl) params =
   [%l.debug "@[Executing function:@ %a@]" Mu.pp_fun_map_decl fn];
   match fn with
   | ProcDecl _ -> Csymex.not_impl "exec_fn: ProcDecl"
-  | Proc { loc; args; body; labels; return_type; trusted } ->
+  | Proc { loc; args; body; labels; return_type; trusted } -> (
       let@@ () = Csymex.with_loc ~loc in
       let* () = stop_if_unsupported args trusted in
-      let++ v = eval_expr ~labels Subst.empty body in
+      let subst = Subst.from_args args params in
+      let++ v = eval_expr ~labels subst body in
       [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
-      Compo_res.Ok ()
+      match v with Normal v -> Core_value.Unit | Returned v -> v)

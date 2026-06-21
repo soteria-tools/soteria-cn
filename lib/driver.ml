@@ -103,7 +103,7 @@ let exec_main config c_config fuel file =
     Fmt.Dump.(
       list
       @@ pair
-           (Compo_res.pp ~ok:(Fmt.any "()")
+           (Compo_res.pp ~ok:Core_value.pp
               ~err:(Soteria.Symex.Or_gave_up.pp Fmt.string)
               ~miss:(Fmt.any "miss"))
            (list Csymex.Value.Expr.pp))
