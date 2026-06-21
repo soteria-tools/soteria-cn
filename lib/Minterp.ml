@@ -119,6 +119,39 @@ let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
         ~checked_op:( -!!@ ) ~unchecked_op:( -!@ )
   | _ -> Fmt.kstr not_impl "unsupported iop"
 
+let cfunction (v : Core_value.t) =
+  (* Cerberus implementation *)
+  (*
+   match Pmap.lookup sym core.funinfo with
+   | Some (_, _, ret, params, is_variadic, has_proto) ->
+       get_env () >>= fun env ->
+       let toint b =
+         ATexpr (Texpr1.cst env (Coeff.s_of_int (if b then 1 else 0)))
+       in
+       return
+       @@ ATtuple
+            [
+              ATctype ret;
+              ATtuple (List.map (fun (_, ty) -> ATctype ty) params);
+              toint is_variadic;
+              toint has_proto;
+            ]
+   | None -> assert false
+  *)
+  let* sym =
+    match v with
+    | Fn sym -> Csymex.return sym
+    | _ -> Csymex.not_impl "cfunction: value is not a function"
+  in
+  let prog = Ctx.get_prog () in
+  let+ fn =
+    Sym.Map.find_opt sym prog.funs
+    |> Csymex.of_opt_not_impl ~msg:"cfunction: function not found in program"
+  in
+  match fn with
+  | ProcDecl _ -> Csymex.not_impl "cfunction: function is a ProcDecl"
+  | Proc { return_type; args; _ } -> Csymex.not_impl "cfunction: proc"
+
 let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
   let@@ () = Csymex.with_loc ~loc:pexpr.loc in

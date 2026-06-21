@@ -95,6 +95,7 @@ let exec_main config c_config fuel file =
   let+ main = Option.to_result ~none:"No main function" umucore.main in
   let main = Symbol_std.Map.find main umucore.funs in
   let results =
+    let@ () = Ctx.run_with_prog umucore in
     let computation = Minterp.exec_fun main [] in
     Csymex.Result.run ~fuel ~mode:OX computation
   in

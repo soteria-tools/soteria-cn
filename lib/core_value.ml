@@ -114,6 +114,8 @@ let cast_int (v : t) : (T.sint Typed.t, string, _) Csymex.Result.t =
   | Obj (Int i) | Loaded (Spec (Int i)) -> Csymex.Result.ok i
   | _ -> Csymex.Result.error "cast_int: value is not an integer"
 
+let ty t = Type t
+
 module Syntax = struct
   module Sym_int_syntax = struct
     open Typed.Syntax

@@ -11,7 +11,9 @@ module BaseTypes = Cn.BaseTypes
 module LogicalConstraints = Cn.LogicalConstraints
 module Sctypes = Cn.Sctypes
 module ReturnTypes = Cn.ReturnTypes
+module LogicalReturnTypes = Cn.LogicalReturnTypes
 module ArgumentTypes = Cn.ArgumentTypes
+module LogicalArgumentTypes = Cn.LogicalArgumentTypes
 module Definition = Cn.Definition
 module Cnprog = Cn.Cnprog
 module Cnstatement = Cn.Cnstatement
@@ -205,6 +207,20 @@ type arguments = {
   logic : (logical_arg * Locations.info) list;
 }
 
+type logical_return = (logical_arg * Locations.info) list
+(** The flattened [Cn.LogicalReturnTypes.t]: a trailing list of logical bindings
+    ([Define]/[Resource]/[Constraint]) whose [I] terminator carries no data.
+    Also the tail of a lemma's old [ArgumentTypes.lemmat]. *)
+
+type return_type = {
+  ret : Sym.t * BaseTypes.t;  (** the returned value's name and base type *)
+  ret_info : Locations.info;
+  logic : logical_return;  (** trailing logical constraints on the result *)
+}
+(** The flattened [Cn.ReturnTypes.t]: a single [Computational] binder followed
+    by a logical tail. The old [ArgumentTypes.ft] is just [arguments] paired
+    with one of these (see {!Of_mucore.argument_types}). *)
+
 type globs = GlobalDef of Sctypes.t * expr | GlobalDecl of Sctypes.t
 
 type loop_info = {
@@ -239,10 +255,10 @@ type fun_map_decl =
       args : arguments;
       body : expr;
       labels : label_def Sym.Map.t;
-      return_type : ReturnTypes.t;
+      return_type : return_type;
       trusted : trusted;
     }
-  | ProcDecl of Locations.t * ArgumentTypes.ft option
+  | ProcDecl of Locations.t * (arguments * return_type) option
 
 type tag_definition = StructDef of Memory.struct_layout | UnionDef
 
@@ -268,7 +284,7 @@ type file = {
   resource_predicates : (Sym.t * Definition.Predicate.t) list;
   logical_predicates : (Sym.t * Definition.Function.t) list;
   datatypes : (Sym.t * datatype) list;
-  lemmata : (Sym.t * (Locations.t * ArgumentTypes.lemmat)) list;
+  lemmata : (Sym.t * (Locations.t * (arguments * logical_return))) list;
   call_funinfo : Sctypes.c_concrete_sig Sym.Map.t;
 }
 
@@ -315,7 +331,6 @@ let pp_request = pp_pp Request.pp
 let pp_bt = pp_pp BaseTypes.pp
 let pp_lc = pp_pp LogicalConstraints.pp
 let pp_sct = pp_pp Sctypes.pp
-let pp_rt = pp_pp ReturnTypes.pp
 let pp_ctype = pp_pp CF.Pp_core_ctype.pp_ctype
 let pp_cbt = pp_pp CF.Pp_core.Basic.pp_core_base_type
 let pp_ctor = pp_pp CF.Pp_core.Basic.pp_ctor
@@ -602,6 +617,16 @@ let pp_arguments ft { comp; logic } =
         Fmt.(list ~sep:cut pp_l)
         logic
 
+let pp_logical_return ft (logic : logical_return) =
+  Fmt.(list ~sep:cut (fun ft (x, _) -> pp_logical_arg ft x)) ft logic
+
+let pp_return_type ft { ret = s, bt; logic; _ } =
+  match logic with
+  | [] -> Fmt.pf ft "@[<2>return %a : %a@]" pp_sym s pp_bt bt
+  | _ ->
+      Fmt.pf ft "@[<v>@[<2>return %a : %a@]@ %a@]" pp_sym s pp_bt bt
+        pp_logical_return logic
+
 let pp_label_def ft = function
   | Non_inlined { label; args; body; _ } ->
       Fmt.pf ft "@[<v 2>label %a:@ %a@ %a@]" pp_sym label pp_arguments args
@@ -622,7 +647,7 @@ let pp_fun_map_decl ft = function
       Fmt.pf ft
         "@[<v 2>proc%s:@ @[<v 2>args:@ %a@]@ @[<2>returns:@ %a@]@ @[<v \
          2>body:@ %a@]@ @[<v 2>labels:@ %a@]@]"
-        tag pp_arguments args pp_rt return_type pp_expr body
+        tag pp_arguments args pp_return_type return_type pp_expr body
         (Fmt.list ~sep:Fmt.cut pp_label)
         (Sym.Map.bindings labels)
   | ProcDecl (_, _) -> Fmt.string ft "<proc decl>"
@@ -840,6 +865,53 @@ module Of_mucore = struct
         let logic, b = arguments_l f l in
         ({ comp = []; logic }, b)
 
+  (* The same flattening over [Cn.ArgumentTypes]/[Cn.LogicalArgumentTypes],
+     which are structurally identical to [Mu.arguments] but nominally distinct.
+     Used to turn [ArgumentTypes.ft]/[lemmat] into [arguments] + a tail. *)
+
+  let logical_return_type : LogicalReturnTypes.t -> logical_return =
+    let rec aux = function
+      | LogicalReturnTypes.Define ((s, it), info, rest) ->
+          (Define (s, it), info) :: aux rest
+      | LogicalReturnTypes.Resource ((s, rbt), info, rest) ->
+          (Resource (s, rbt), info) :: aux rest
+      | LogicalReturnTypes.Constraint (lc, info, rest) ->
+          (Constraint lc, info) :: aux rest
+      | LogicalReturnTypes.I -> []
+    in
+    aux
+
+  let return_type (ReturnTypes.Computational ((s, bt), info, lrt)) : return_type
+      =
+    { ret = (s, bt); ret_info = info; logic = logical_return_type lrt }
+
+  let rec argument_types_l :
+      'i 'j. ('i -> 'j) -> 'i LogicalArgumentTypes.t -> logical_return * 'j =
+   fun f -> function
+    | LogicalArgumentTypes.Define ((s, it), info, rest) ->
+        let l, b = argument_types_l f rest in
+        ((Define (s, it), info) :: l, b)
+    | LogicalArgumentTypes.Resource ((s, rbt), info, rest) ->
+        let l, b = argument_types_l f rest in
+        ((Resource (s, rbt), info) :: l, b)
+    | LogicalArgumentTypes.Constraint (lc, info, rest) ->
+        let l, b = argument_types_l f rest in
+        ((Constraint lc, info) :: l, b)
+    | LogicalArgumentTypes.I i -> ([], f i)
+
+  let rec argument_types :
+      'i 'j. ('i -> 'j) -> 'i ArgumentTypes.t -> arguments * 'j =
+   fun f -> function
+    | ArgumentTypes.Computational ((s, bt), info, rest) ->
+        let a, b = argument_types f rest in
+        ({ a with comp = (Computational (s, bt), info) :: a.comp }, b)
+    | ArgumentTypes.Ghost ((s, bt), info, rest) ->
+        let a, b = argument_types f rest in
+        ({ a with comp = (Ghost (s, bt), info) :: a.comp }, b)
+    | ArgumentTypes.L l ->
+        let logic, b = argument_types_l f l in
+        ({ comp = []; logic }, b)
+
   let trusted = function Mu.Trusted loc -> Trusted loc | Mu.Checked -> Checked
 
   let pmap_to_symmap conv m =
@@ -870,10 +942,11 @@ module Of_mucore = struct
             args;
             body = expr e;
             labels = pmap_to_symmap label_def labels;
-            return_type = rt;
+            return_type = return_type rt;
             trusted = trusted tr;
           }
-    | Mu.ProcDecl (loc, ft) -> ProcDecl (loc, ft)
+    | Mu.ProcDecl (loc, ft) ->
+        ProcDecl (loc, Option.map (argument_types return_type) ft)
 
   let globs = function
     | Mu.GlobalDef (ct, e) -> GlobalDef (ct, expr e)
@@ -902,7 +975,11 @@ module Of_mucore = struct
       resource_predicates = f.resource_predicates;
       logical_predicates = f.logical_predicates;
       datatypes = List.map (fun (s, d) -> (s, datatype d)) f.datatypes;
-      lemmata = f.lemmata;
+      lemmata =
+        List.map
+          (fun (s, (loc, lemmat)) ->
+            (s, (loc, argument_types logical_return_type lemmat)))
+          f.lemmata;
       call_funinfo = pmap_to_symmap (fun x -> x) f.call_funinfo;
     }
 end
