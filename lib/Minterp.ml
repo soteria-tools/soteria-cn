@@ -8,6 +8,40 @@ open Csymex.Syntax
 module Mu = Usable_mucore
 open Mu
 
+module ExprM = struct
+  type 'a exec_r = Normal of 'a | Returned of Core_value.t
+  [@@deriving show { with_path = false }]
+
+  type 'a t = ('a exec_r, string, unit) Result.t
+
+  let bind (f : 'a -> 'b t) (m : 'a t) : 'b t =
+    Result.bind
+      (function Normal x -> f x | Returned v -> Result.ok (Returned v))
+      m
+
+  let map (f : 'a -> 'b) (m : 'a t) : 'b t =
+    Result.map
+      (function Normal x -> Normal (f x) | Returned v -> Returned v)
+      m
+
+  let ok (x : 'a) : 'a t = Result.ok (Normal x)
+  let error (msg : string) : 'a t = Result.error msg
+  let returned (v : Core_value.t) : 'a t = Result.ok (Returned v)
+
+  let map_list (xs : 'a list) ~(f : 'a -> 'b t) : 'b list t =
+    Monad.foldM ~init:[] ~return:ok ~bind ~fold:Foldable.List.fold xs
+      ~f:(fun acc a -> map (fun b -> b :: acc) (f a))
+    |> map List.rev
+
+  module Syntax = struct
+    let ( let*** ) m f = bind f m
+    let ( let+++ ) m f = map f m
+  end
+end
+
+open ExprM
+open Syntax
+
 module Subst = struct
   include Symbol_std.Map
 
@@ -47,6 +81,7 @@ let eval_ctor (ctor : CF.Core.ctor) (v : Core_value.t list) :
   | _ -> Fmt.kstr not_impl "unsupported ctor"
 
 let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
+  [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
   let@@ () = Csymex.with_loc ~loc:pexpr.loc in
   match pexpr.node with
   | PEsym sym -> Result.ok (Subst.find sym subst)
@@ -79,7 +114,9 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEare_compatible _ -> not_impl "PEare_compatible"
 
 let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
-    (body : expr) : (Core_value.t, _, _) Csymex.Result.t =
+    (body : expr) : Core_value.t ExprM.t =
+  let open ExprM.Syntax in
+  [%l.trace "Evaluating expr: %a" Mu.pp_expr body];
   let@@ () = Csymex.with_loc ~loc:body.loc in
   (* let* () =
     if List.is_empty body.annots then return ()
@@ -91,15 +128,18 @@ let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
       let* subst = Subst.assign_pattern subst pat v in
       eval_expr ~labels subst body'
   | Esseq { pat; value; body } ->
-      let** v = eval_expr ~labels subst value in
+      let*** v = eval_expr ~labels subst value in
       let* subst = Subst.assign_pattern subst pat v in
       eval_expr ~labels subst body
   | Ebound e -> eval_expr ~labels subst e
-  | Epure e -> eval_pexpr subst e
+  | Epure e ->
+      let** r = eval_pexpr subst e in
+      ExprM.ok r
   | Erun (lab, pes) -> (
+      [%l.trace "Running label: %a" Sym.pp lab];
       let** vs = Result.map_list ~f:(eval_pexpr subst) pes in
       match (Sym.Map.find lab labels, vs) with
-      | Return _, [ v ] -> Result.ok v
+      | Return _, [ v ] -> ExprM.returned v
       | Return _, _ ->
           Fmt.kstr not_impl "Return label with multiple values: %a" Sym.pp lab
       | Non_inlined _, _ -> Fmt.kstr not_impl "Non-inlined label: %a" Sym.pp lab
@@ -114,5 +154,5 @@ let exec_fun (fn : Mu.fun_map_decl) params =
       let@@ () = Csymex.with_loc ~loc in
       let* () = stop_if_unsupported args trusted in
       let++ v = eval_expr ~labels Subst.empty body in
-      [%l.debug "Function returned: %a" Core_value.pp v];
+      [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
       Compo_res.Ok ()
