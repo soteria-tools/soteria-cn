@@ -28,9 +28,11 @@ module ExprM = struct
   let error (msg : string) : 'a t = Result.error msg
   let returned (v : Core_value.t) : 'a t = Result.ok (Returned v)
 
+  let fold_list (xs : 'a list) ~(init : 'b) ~(f : 'b -> 'a -> 'b t) : 'b t =
+    Monad.foldM ~init ~return:ok ~bind ~fold:Foldable.List.fold xs ~f
+
   let map_list (xs : 'a list) ~(f : 'a -> 'b t) : 'b list t =
-    Monad.foldM ~init:[] ~return:ok ~bind ~fold:Foldable.List.fold xs
-      ~f:(fun acc a -> map (fun b -> b :: acc) (f a))
+    fold_list ~init:[] xs ~f:(fun acc a -> map (fun b -> b :: acc) (f a))
     |> map List.rev
 
   module Syntax = struct
@@ -47,12 +49,24 @@ module Subst = struct
 
   type nonrec t = Core_value.t t
 
-  let assign_pattern subt (pat : pattern) (v : Core_value.t) : t Csymex.t =
+  let rec assign_pattern subst (pat : pattern) (v : Core_value.t) : t Csymex.t =
     let@@ () = Csymex.with_loc ~loc:pat.loc in
     match pat.node with
-    | CaseBase (Some sym, _) -> return (add sym v subt)
-    | CaseBase (None, _) -> return subt
-    | _ -> not_impl "assign_pattern: unsupported pattern"
+    | CaseBase (Some sym, _) -> return (add sym v subst)
+    | CaseBase (None, _) -> return subst
+    | CaseCtor (ctor, pats) -> (
+        match (ctor, v, pats) with
+        | Cspecified, Loaded (Spec v'), [ p ] -> assign_pattern subst p (Obj v')
+        | Ctuple, Tuple vs, pats' when List.compare_lengths vs pats' = 0 ->
+            Csymex.fold_list (List.combine pats' vs) ~init:subst
+              ~f:(fun acc (p, v) -> assign_pattern acc p v)
+        | _ ->
+            Fmt.kstr not_impl
+              "@[<v 2>assign_pattern: unsupported constructor pattern@ CTOR: \
+               %a@ VALUE: %a@ PATTERNS: %a@]"
+              Mu.pp_ctor ctor Core_value.pp v
+              (Fmt.Dump.list Mu.pp_pattern)
+              pats)
 end
 
 let sym_is_id sym id =
@@ -71,14 +85,39 @@ let eval_impl_call (i : CF.Implementation.implementation_constant)
 let eval_pe_call (sym : Sym.t) (args : Core_value.t list) :
     (Core_value.t, _, _) Result.t =
   match (sym, args) with
-  | Symbol (_, _, SD_Id "conv_loaded_int"), [ _; i ] -> Result.ok i
+  | Symbol (_, _, SD_Id ("conv_loaded_int" | "conv_int")), [ _; i ] ->
+      Result.ok i
   | _ -> Fmt.kstr not_impl "unsupported pe call: %a" Sym.pp sym
 
 let eval_ctor (ctor : CF.Core.ctor) (v : Core_value.t list) :
     (Core_value.t, _, _) Result.t =
   match (ctor, v) with
   | Cspecified, [ Obj v ] -> Result.ok (Core_value.Loaded (Spec v))
-  | _ -> Fmt.kstr not_impl "unsupported ctor"
+  | Cunspecified, _ -> Result.ok (Core_value.Loaded Unspec)
+  | Ctuple, vs -> Result.ok (Core_value.Tuple vs)
+  | _ -> Fmt.kstr not_impl "Unsupported constructor: %a" Mu.pp_ctor ctor
+
+let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
+    (lhs : Typed.(T.sint t)) (rhs : Typed.(T.sint t)) :
+    (Typed.(T.sint t), _, _) Result.t =
+  let open Typed.Infix in
+  let signed = Layout.is_int_ty_signed int_ty in
+  let arith_op ~check_signed_ovf ~checked_op ~unchecked_op =
+    if signed then
+      if%sat check_signed_ovf lhs rhs then Result.error "Integer overflow"
+      else Result.ok (checked_op lhs rhs)
+    else Result.ok (unchecked_op lhs rhs)
+  in
+  match iop with
+  | IOpAdd ->
+      arith_op
+        ~check_signed_ovf:(Typed.BitVec.add_overflows ~signed:true)
+        ~checked_op:( +!!@ ) ~unchecked_op:( +!@ )
+  | IOpSub ->
+      arith_op
+        ~check_signed_ovf:(Typed.BitVec.sub_overflows ~signed:true)
+        ~checked_op:( -!!@ ) ~unchecked_op:( -!@ )
+  | _ -> Fmt.kstr not_impl "unsupported iop"
 
 let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
@@ -86,6 +125,7 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   match pexpr.node with
   | PEsym sym -> Result.ok (Subst.find sym subst)
   | PEval v -> Result.ok (Core_value.of_mu v)
+  | PEcfunction pe -> eval_pexpr subst pe
   | PEundef (_, ub) -> Result.error "UB"
   | PEcall (generic_name, args) -> (
       let** args = Result.map_list ~f:(eval_pexpr subst) args in
@@ -95,11 +135,21 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEctor (ctor, pes) ->
       let** vs = Result.map_list ~f:(eval_pexpr subst) pes in
       eval_ctor ctor vs
+  | PElet { pat; value; body } ->
+      let** v = eval_pexpr subst value in
+      let* subst = Subst.assign_pattern subst pat v in
+      eval_pexpr subst body
+  | PEcatch_exceptional_condition { int_ty; iop; lhs; rhs } ->
+      let** lhs = eval_pexpr subst lhs in
+      let** rhs = eval_pexpr subst rhs in
+      let** lhs = Core_value.cast_int lhs in
+      let** rhs = Core_value.cast_int rhs in
+      let++ res = eval_iop ~int_ty iop lhs rhs in
+      Core_value.Obj (Core_value.Int res)
   | PEconstrained _ -> not_impl "PEconstrainted"
   | PEerror _ -> not_impl "PEerror"
   | PEmember_shift _ -> not_impl "PEmember_shift"
   | PEarray_shift _ -> not_impl "PEarray_shift"
-  | PEcatch_exceptional_condition _ -> not_impl "PEcatch_exceptional_condition"
   | PEwrapI _ -> not_impl "PEwrapI"
   | PEmemop _ -> not_impl "PEmemop"
   | PEnot _ -> not_impl "PEnot"
@@ -107,9 +157,7 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEconv_int _ -> not_impl "PEconv_int"
   | PEstruct _ -> not_impl "PEstruct"
   | PEunion _ -> not_impl "PEunion"
-  | PEcfunction _ -> not_impl "PEcfunction"
   | PEmemberof _ -> not_impl "PEmemberof"
-  | PElet _ -> not_impl "PElet"
   | PEif _ -> not_impl "PEif"
   | PEare_compatible _ -> not_impl "PEare_compatible"
 
@@ -127,10 +175,13 @@ let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
       let** v = eval_pexpr subst value in
       let* subst = Subst.assign_pattern subst pat v in
       eval_expr ~labels subst body'
-  | Esseq { pat; value; body } ->
+  | Esseq { pat; value; body } | Ewseq { pat; value; body } ->
       let*** v = eval_expr ~labels subst value in
       let* subst = Subst.assign_pattern subst pat v in
       eval_expr ~labels subst body
+  | Eunseq es ->
+      let+++ res = ExprM.map_list es ~f:(eval_expr ~labels subst) in
+      Core_value.Tuple res
   | Ebound e -> eval_expr ~labels subst e
   | Epure e ->
       let** r = eval_pexpr subst e in
@@ -147,7 +198,7 @@ let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
   | _ -> Fmt.kstr not_impl "Unsupported expr: %a" Mu.pp_expr body
 
 let exec_fun (fn : Mu.fun_map_decl) params =
-  [%l.trace "Executing function: %a" Mu.pp_fun_map_decl fn];
+  [%l.debug "@[Executing function:@ %a@]" Mu.pp_fun_map_decl fn];
   match fn with
   | ProcDecl _ -> Csymex.not_impl "exec_fn: ProcDecl"
   | Proc { loc; args; body; labels; return_type; trusted } ->
