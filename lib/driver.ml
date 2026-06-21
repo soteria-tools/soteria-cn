@@ -94,9 +94,15 @@ let exec_main file =
   let main = Symbol_std.Map.find main umucore.funs in
   let results =
     let computation = Minterp.exec_fun main [] in
-    Csymex.run ~mode:OX computation
+    Csymex.Result.run ~mode:OX computation
   in
   Fmt.pr "Execution results: %a\n"
-    Fmt.Dump.(list @@ pair (Fmt.any "()") (list Csymex.Value.Expr.pp))
+    Fmt.Dump.(
+      list
+      @@ pair
+           (Compo_res.pp ~ok:(Fmt.any "()")
+              ~err:(Soteria.Symex.Or_gave_up.pp Fmt.string)
+              ~miss:(Fmt.any "miss"))
+           (list Csymex.Value.Expr.pp))
     results;
   ()

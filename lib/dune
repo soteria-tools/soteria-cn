@@ -7,4 +7,4 @@
   cerberus-lib.frontend
   cerberus-lib.backend_common)
  (preprocess
-  (pps soteria.ppx)))
+  (pps soteria.ppx ppx_deriving.std)))

@@ -620,8 +620,8 @@ let pp_fun_map_decl ft = function
         Fmt.pf ft "@[<v 2>%a:@ %a@]" pp_sym s pp_label_def l
       in
       Fmt.pf ft
-        "@[<v 2>proc%s:@ @[<v 2>args:@ %a@]@ @[<2>returns:@ %a@]@ @[<v 2>body:@ \
-         %a@]@ @[<v 2>labels:@ %a@]@]"
+        "@[<v 2>proc%s:@ @[<v 2>args:@ %a@]@ @[<2>returns:@ %a@]@ @[<v \
+         2>body:@ %a@]@ @[<v 2>labels:@ %a@]@]"
         tag pp_arguments args pp_rt return_type pp_expr body
         (Fmt.list ~sep:Fmt.cut pp_label)
         (Sym.Map.bindings labels)
