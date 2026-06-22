@@ -5,24 +5,34 @@ typedef struct ln {
   struct ln* next;
 } SLL;
 
-SLL* listAppend(SLL* x, int v) {
+/* Allocating functions return 0 on success and 1 on allocation failure,
+   handing back their result through an out-parameter. */
+
+int listAppend(SLL* x, int v, SLL** out) {
   if (x == NULL) {
     SLL* el = malloc(sizeof(SLL));
+    if (el == NULL) return 1;
     el->data = v;
     el->next = NULL;
-    return el;
+    *out = el;
+    return 0;
   } else {
-    SLL* tailp = listAppend(x->next, v);
+    SLL* tailp;
+    int err = listAppend(x->next, v, &tailp);
+    if (err) return err;
     x->next = tailp;
-    return x;
+    *out = x;
+    return 0;
   };
 }
 
-SLL* listPrepend(SLL* x, int v) {
+int listPrepend(SLL* x, int v, SLL** out) {
   SLL* new_node = malloc(sizeof(SLL));
+  if (new_node == NULL) return 1;
   new_node->data = v;
   new_node->next = x;
-  return new_node;
+  *out = new_node;
+  return 0;
 }
 
 int listLength(SLL* x) {
@@ -33,29 +43,31 @@ int listLength(SLL* x) {
   };
 }
 
-SLL* listCopy(SLL* x) {
-  SLL* r;
+int listCopy(SLL* x, SLL** out) {
   if (x == NULL) {
-    r = NULL;
+    *out = NULL;
+    return 0;
   } else {
-    SLL* t = listCopy(x->next);
-    r = malloc(sizeof(SLL));
+    SLL* t;
+    int err = listCopy(x->next, &t);
+    if (err) return err;
+    SLL* r = malloc(sizeof(SLL));
+    if (r == NULL) return 1;
     r->data = x->data;
     r->next = t;
+    *out = r;
+    return 0;
   };
-  return r;
 }
 
+/* Pure pointer rearrangement: never allocates, so it cannot fail. */
 SLL* listConcat(SLL* x, SLL* y) {
-  SLL* r;
   if (x == NULL) {
-      r = y;
+    return y;
   } else {
-    SLL* c = listConcat (x->next, y);
-    x->next = c;
-    r = x;
+    x->next = listConcat(x->next, y);
+    return x;
   };
-  return r;
 }
 
 int sum(SLL* x) {
@@ -68,9 +80,10 @@ int sum(SLL* x) {
 
 int main() {
   SLL* x = NULL;
-  x = listAppend(x, 2);
-  x = listPrepend(x, 1);
-  SLL* y = listCopy(x);
+  if (listAppend(x, 2, &x)) return 0;
+  if (listPrepend(x, 1, &x)) return 0;
+  SLL* y;
+  if (listCopy(x, &y)) return 0;
   x = listConcat(x, y);
-  return !((sum(x) == 6) && (listLength(x) == 4)); /* returns 3 */
+  return !((sum(x) == 6) && (listLength(x) == 4)); /* returns 0 */
 }

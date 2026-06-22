@@ -170,7 +170,7 @@ let eval_impl_call (i : CF.Implementation.implementation_constant)
   match (i, args) with _ -> not_impl "unsupported impl call"
 
 let malloc_failure_case () =
-  if (* (Soteria_c_lib.Config.current ()).alloc_cannot_fail *) false then []
+  if (Soteria_c_lib.Config.current ()).alloc_cannot_fail then []
   else
     [
       (fun () ->
@@ -329,11 +329,12 @@ and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
       ok @@ List.nth l i
   | Symbol (_, _, SD_Id "malloc_proxy"), [ size ] ->
       InterpM.branches
-        [
-          (fun () ->
-            let+ ptr = State.alloc size in
-            Core_value.Loaded (Spec (Ptr ptr)));
-        ]
+        ([
+           (fun () ->
+             let+ ptr = State.alloc size in
+             Core_value.Loaded (Spec (Ptr ptr)));
+         ]
+        @ malloc_failure_case ())
   | sym, args -> (
       match Sym.Map.find_opt sym (Ctx.get_prog ()).funs with
       | None -> not_impl "Couldn't resolve function: %a" Sym.pp sym

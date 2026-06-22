@@ -14,6 +14,6 @@
   Successfully finished with (Loaded (Spec (Int 0x00000000)))
   Finished without errors!
 
-  $ soteria-cn exec many_loops.c
+  $ soteria-cn exec many_loops.c --alloc-cannot-fail
   Successfully finished with (Loaded (Spec (Int 0x00001356)))
   Finished without errors!
