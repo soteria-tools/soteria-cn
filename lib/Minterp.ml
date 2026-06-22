@@ -175,7 +175,7 @@ let malloc_failure_case () =
     [
       (fun () ->
         let ptr = Typed.Ptr.null in
-        ok (Core_value.Obj (Ptr ptr)));
+        ok (Core_value.Loaded (Spec (Ptr ptr))));
     ]
 
 let conv_int ~(ty : CF.Ctype.ctype) v : Typed.(T.sint t) InterpM.t =
@@ -257,6 +257,10 @@ let eval_memop (memop : Symbol_std.t CF.Mem_common.generic_memop)
       let* p2 = CV.cast_ptr p2 in
       (* Is this correct? I forgot the semantics of pointer equality *)
       ok (Core_value.Bool (p1 ==@ p2))
+  | (PtrWellAligned | PtrValidForDeref), args ->
+      (* Pointer validity for dereference should be handled by the state.
+         For alignment, we could also do the Soteria Rust trick of embedding the alignment in the pointer representation. *)
+      ok Core_value.true_
   | _ -> not_impl "Unsupported memop: %a" Mu.pp_memop memop
 
 let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
@@ -322,7 +326,7 @@ and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
         [
           (fun () ->
             let+ ptr = State.alloc size in
-            Core_value.Obj (Ptr ptr));
+            Core_value.Loaded (Spec (Ptr ptr)));
         ]
   | sym, args -> (
       match Sym.Map.find_opt sym (Ctx.get_prog ()).funs with
