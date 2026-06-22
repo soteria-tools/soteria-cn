@@ -4,6 +4,7 @@ open Typed
 module Sym = Symbol_std
 module Ctype = Cerb_frontend.Ctype
 module Impl_mem = Cerb_frontend.Impl_mem
+module Svalue = Soteria.Bv_values.Svalue
 
 type 'a or_unspec = Spec of 'a | Unspec
 [@@deriving show { with_path = false }]
@@ -108,15 +109,99 @@ let rec of_mu (v : Usable_mucore.value) : t =
   | Vlist (_, vs) -> List (List.map of_mu vs)
   | Vloaded lv -> Loaded (loaded_of_mu lv)
 
-let cast_int (v : t) : (T.sint Typed.t, string, _) Csymex.Result.t =
-  match v with
-  | Obj (Int i) | Loaded (Spec (Int i)) -> Csymex.Result.ok i
-  | _ -> Csymex.Result.error "cast_int: value is not an integer"
+(* A scalar [obj] coerces to a [Basic] aggregate value; arrays and structs map
+   to their aggregate counterparts. Function values have no runtime
+   representation. *)
+let rec obj_to_agv (o : obj) : Aggregate_val.t =
+  match o with
+  | Int i -> Aggregate_val.Basic (i :> T.cval Typed.t)
+  | Float f -> Aggregate_val.Basic (f :> T.cval Typed.t)
+  | Ptr p -> Aggregate_val.Basic (p :> T.cval Typed.t)
+  | Array objs -> Aggregate_val.Array (List.map loaded_to_agv objs)
+  | Struct { members; _ } ->
+      Aggregate_val.Struct (List.map loaded_to_agv members)
+  | Fn _ ->
+      L.failwith
+        "Core_value.to_agv: function value is not an aggregate value: %a" pp_obj
+        o
 
-let cast_type (v : t) : (Ctype.ctype, string, _) Csymex.Result.t =
+and loaded_to_agv (o : obj or_unspec) : Aggregate_val.t =
+  match o with
+  | Spec o -> obj_to_agv o
+  | Unspec ->
+      L.failwith
+        "Core_value.to_agv: unspecified value is not an aggregate value"
+
+let to_agv (v : t) : Aggregate_val.t =
   match v with
-  | Type ct -> Csymex.Result.ok ct
-  | _ -> Csymex.Result.error "cast_type: value is not a type"
+  | Obj o -> obj_to_agv o
+  | Loaded o -> loaded_to_agv o
+  | Type _ | Unit | List _ | Tuple _ | Bool _ ->
+      L.failwith "Core_value.to_agv: not an aggregate value: %a" pp v
+
+(* The runtime type of a [Basic] aggregate value tells us which scalar [obj] it
+   denotes. *)
+let obj_of_cval (v : T.cval Typed.t) : obj =
+  match Typed.get_ty v with
+  | Svalue.TBitVector _ -> Int (Typed.cast v)
+  | Svalue.TPointer _ -> Ptr (Typed.cast v)
+  | Svalue.TFloat _ -> Float (Typed.cast v)
+  | ty ->
+      L.failwith "Core_value.of_agv: unexpected basic value type: %a"
+        Svalue.pp_ty ty
+
+(* Aggregate values carry neither array element types nor struct tags/field
+   types, so the expected C type [ty] is needed to rebuild them. *)
+let rec obj_of_agv ~(ty : Ctype.ctype) (agv : Aggregate_val.t) : obj =
+  match agv with
+  | Aggregate_val.Basic v -> obj_of_cval v
+  | Aggregate_val.Array elems ->
+      let elem_ty =
+        match Layout.get_array_info ty with
+        | Some (elem_ty, _) -> elem_ty
+        | None ->
+            L.failwith "Core_value.of_agv: array value for non-array type: %a"
+              Fmt_ail.pp_ty ty
+      in
+      Array (List.map (fun e -> Spec (obj_of_agv ~ty:elem_ty e)) elems)
+  | Aggregate_val.Struct fields ->
+      let tag =
+        match Ctype.proj_ctype_ ty with
+        | Ctype.Struct tag -> tag
+        | _ ->
+            L.failwith "Core_value.of_agv: struct value for non-struct type: %a"
+              Fmt_ail.pp_ty ty
+      in
+      let field_tys =
+        match Layout.get_struct_fields_ty ty with
+        | Some (fs, _fam) -> List.map (fun (_, (_, _, _, fty)) -> fty) fs
+        | None ->
+            L.failwith "Core_value.of_agv: unknown struct definition: %a"
+              Fmt_ail.pp_ty ty
+      in
+      let members =
+        try
+          List.map2 (fun fty f -> Spec (obj_of_agv ~ty:fty f)) field_tys fields
+        with Invalid_argument _ ->
+          L.failwith
+            "Core_value.of_agv: struct value has %d fields but type %a expects \
+             %d"
+            (List.length fields) Fmt_ail.pp_ty ty (List.length field_tys)
+      in
+      Struct { tag; members }
+
+(* A load yields a (specified) loaded value. *)
+let of_agv ~(ty : Ctype.ctype) (agv : Aggregate_val.t) : t =
+  Loaded (Spec (obj_of_agv ~ty agv))
+
+let cast_int (v : t) : T.sint Typed.t option =
+  match v with Obj (Int i) | Loaded (Spec (Int i)) -> Some i | _ -> None
+
+let cast_type (v : t) : Ctype.ctype option =
+  match v with Type ct -> Some ct | _ -> None
+
+let cast_ptr (v : t) : T.sptr Typed.t option =
+  match v with Obj (Ptr p) | Loaded (Spec (Ptr p)) -> Some p | _ -> None
 
 let c_int (i : int) : t =
   Obj (Int (Typed.BitVec.mk_masked Typed.c_int_bits (Z.of_int i)))

@@ -92,20 +92,27 @@ let exec_main config c_config fuel file =
   let@ () = initialise ~soteria_config:config Whole_program c_config in
   let mucore_file = Frontend.load_mucore_ast file in
   let umucore = Usable_mucore.of_mucore mucore_file in
-  let+ main = Option.to_result ~none:"No main function" umucore.main in
+  let* main = Option.to_result ~none:"No main function" umucore.main in
   let main = Symbol_std.Map.find main umucore.funs in
   let results =
     let@ () = Ctx.run_with_prog umucore in
     let computation = Minterp.exec_fun main [] in
+    let computation =
+      State.SM.Result.run_with_state ~state:State.empty computation
+    in
     Csymex.Result.run ~fuel ~mode:OX computation
   in
-  Fmt.pr "Execution results: %a\n"
-    Fmt.Dump.(
-      list
-      @@ pair
-           (Compo_res.pp ~ok:Core_value.pp
-              ~err:(Soteria.Symex.Or_gave_up.pp Fmt.string)
-              ~miss:(Fmt.any "miss"))
-           (list Csymex.Value.Expr.pp))
+  let has_errors = ref false in
+  List.iter
+    (let open Soteria_c_lib.Error.Diagnostic in
+     function
+     | Compo_res.Ok _, _ -> ()
+     | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), st)), _ ->
+         has_errors := true;
+         print_diagnostic ~fid:"main" ~call_trace ~error:err
+     | Error (Gave_up msg), _ ->
+         print_diagnostic ~fid:"main"
+           ~call_trace:Soteria.Terminal.Call_trace.empty ~error:(`Gave_up msg)
+     | Missing _, _ -> Fmt.failwith "Can't miss at the moment")
     results;
-  ()
+  if !has_errors then Ok () else Error "Bugs found"
