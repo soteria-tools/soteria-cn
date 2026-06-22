@@ -84,7 +84,19 @@ let initialise ?soteria_config mode config f =
   let@ () = Soteria_c_lib.Config.with_config ~config ~mode in
   Soteria.Stats.As_ctx.with_dumped () f
 
-let exec_main config c_config fuel file =
+(* Parse [file] down to the (Usable) Mucore AST and pretty-print it, without
+   running any symbolic execution. *)
+let show_mucore config c_config file =
+  let open Soteria_c_lib in
+  let open Syntaxes.Result in
+  let* file = Option.to_result ~none:"No input file provided" file in
+  let@ () = initialise ~soteria_config:config Whole_program c_config in
+  let mucore_file = Frontend.load_mucore_ast file in
+  let umucore = Usable_mucore.of_mucore mucore_file in
+  Fmt.pr "%a@." Usable_mucore.pp_file umucore;
+  Ok ()
+
+let exec_main (config : Soteria.Config.t) c_config fuel file =
   let open Soteria_c_lib in
   let open Syntaxes.Result in
   let* file = Option.to_result ~none:"No input file provided" file in
@@ -100,7 +112,7 @@ let exec_main config c_config fuel file =
     let computation =
       State.SM.Result.run_with_state ~state:State.empty computation
     in
-    Csymex.Result.run ~fuel ~mode:OX computation
+    Csymex.Result.run ~stats:(Dump ()) ~fuel ~mode:OX computation
   in
   let has_errors = ref false in
   List.iter

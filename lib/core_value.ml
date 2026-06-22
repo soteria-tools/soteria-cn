@@ -208,6 +208,16 @@ let c_int (i : int) : t =
 
 let c_int_of_bool b = if b then c_int 1 else c_int 0
 
+let lt ~signed lhs rhs =
+  match (lhs, rhs) with
+  | ( (Obj (Int i1) | Loaded (Spec (Int i1))),
+      (Obj (Int i2) | Loaded (Spec (Int i2))) ) ->
+      Bool (Typed.BitVec.lt ~signed i1 i2)
+  | ( (Obj (Float f1) | Loaded (Spec (Float f1))),
+      (Obj (Float f2) | Loaded (Spec (Float f2))) ) ->
+      Bool (Typed.Float.lt f1 f2)
+  | _ -> L.failwith "Core_value.lt: not comparable: %a, %a" pp lhs pp rhs
+
 module Bool = struct
   let not b =
     match b with

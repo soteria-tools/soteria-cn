@@ -201,17 +201,20 @@ let conv_int ~(ty : CF.Ctype.ctype) v : Typed.(T.sint t) InterpM.t =
       let signed = Layout.is_int_ty_signed ity in
       Typed.BitVec.fit_to ~signed new_size i
 
-let eval_ctor (ctor : CF.Core.ctor) (v : Core_value.t list) :
+let eval_ctor (ctor : CF.Core.ctor) (vs : Core_value.t list) :
     Core_value.t InterpM.t =
   let open Core_value in
-  match (ctor, v) with
+  match (ctor, vs) with
   | Cspecified, [ Obj v ] -> ok (Loaded (Spec v))
   | Cunspecified, _ -> ok (Loaded Unspec)
   | Ctuple, vs -> ok (Tuple vs)
   | Civsizeof, [ Type ty ] ->
       let+^ size = Layout.size_of_s ty in
       Obj (Int size)
-  | _ -> not_impl "Unsupported constructor: %a" Mu.pp_ctor ctor
+  | _ ->
+      not_impl "Unsupported constructor: %a with args %a" Mu.pp_ctor ctor
+        (Fmt.Dump.list Core_value.pp)
+        vs
 
 let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
     (lhs : Typed.(T.sint t)) (rhs : Typed.(T.sint t)) :
@@ -268,6 +271,9 @@ let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
   match op with
   | OpEq -> ok (Bool (sem_eq lhs rhs))
   | OpOr -> ok @@ Core_value.Bool.or_ lhs rhs
+  | OpLt ->
+      (* FIXME: I think this is wrong depending on signedness of values? We'd need to pass types here, as in Soteria C. *)
+      ok @@ Core_value.lt ~signed:false lhs rhs
   | _ -> not_impl "eval_op: unsupported operator: %a" Mu.pp_binop op
 
 let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t
@@ -307,7 +313,7 @@ and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
       match i with
       | Loaded (Spec _) | Obj (Int _) ->
           let+ i = conv_int ~ty i in
-          Core_value.Loaded (Spec (Int i))
+          Core_value.(Obj (Int i))
       | Loaded Unspec -> ok (Core_value.Loaded Unspec)
       | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
   | Symbol (_, _, SD_Id "params_length"), [ Tuple l ] ->
@@ -395,7 +401,7 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
       match i with
       | Loaded (Spec _) | Obj (Int _) ->
           let+ i = conv_int ~ty i in
-          Core_value.Loaded (Spec (Int i))
+          Core_value.(Obj (Int i))
       | Loaded Unspec -> ok (Core_value.Loaded Unspec)
       | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
   | PEmember_shift { ptr; tag; member } ->
@@ -419,6 +425,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
   [%l.trace "Evaluating expr: %a" Mu.pp_expr body];
   let@ () = with_loc ~loc:body.loc in
   [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
+  let*^ () = Csymex.consume_fuel_steps 1 in
   (* let* () =
     if List.is_empty body.annots then return ()
     else Fmt.kstr not_impl "annotations: %a" 
@@ -447,7 +454,9 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
       | Return _, _ ->
           not_impl "Return label with multiple values: %a" Sym.pp lab
       | Non_inlined _, _ -> not_impl "Non-inlined label: %a" Sym.pp lab
-      | Loop _, _ -> not_impl "Loop label: %a" Sym.pp lab)
+      | Loop { loc = _; args = _; body; annots = _; info = _ }, _vs ->
+          (* TODO: loop invariants etvc *)
+          eval_expr ~labels subst body)
   | Eif { cond; then_; else_ } ->
       let* guard = eval_pexpr subst cond in
       let guard = Core_value.Bool.to_sbool guard in

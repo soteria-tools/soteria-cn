@@ -33,6 +33,25 @@ module Exec_main = struct
       (Term.map result_to_int term)
 end
 
+module Show_mucore = struct
+  let file_arg = Arg.(value & pos 0 (some file) None & info ~docv:"FILE" [])
+
+  let term =
+    Term.(
+      const Soteria_cn.Driver.show_mucore
+      $ Soteria.Config.cmdliner_term ()
+      $ Soteria_c_lib.Config.cmdliner_term ()
+      $ file_arg)
+
+  let cmd =
+    Cmd.v
+      (Cmd.info ~doc:"Parse a program and display its Mucore representation."
+         "show-mucore")
+      (Term.map result_to_int term)
+end
+
 let arg = try Sys.argv.(1) with _ -> failwith "No argument provided"
-let cmd = Cmd.group (Cmd.info "soteria-cn") [ Exec_main.cmd ]
+
+let cmd =
+  Cmd.group (Cmd.info "soteria-cn") [ Exec_main.cmd; Show_mucore.cmd ]
 let () = exit @@ Cmd.eval' cmd

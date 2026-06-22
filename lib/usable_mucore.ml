@@ -871,9 +871,58 @@ module Of_mucore = struct
   let paction (Mu.Paction (polarity, Mu.Action (loc, a_))) : action =
     { loc; polarity; action = action_ a_ }
 
-  let rec expr (Mu.Expr (loc, annots, _, e_)) : expr =
-    { loc; annots; node = expr_ e_ }
+  (* Discarded [pure(unit)] sequencing steps are folded out as each [expr] is
+     built, never constructed and then simplified — so these predicates inspect
+     the source [Mu] AST directly, before conversion. *)
+  let is_mu_wildcard (Mu.Pattern (_, _, _, p_)) =
+    match p_ with Mu.CaseBase (None, _) -> true | _ -> false
 
+  let mu_is_pure_unit (Mu.Expr (_, _, _, e_)) =
+    match e_ with
+    | Mu.Epure (Mu.Pexpr (_, _, _, Mu.PEval (Mu.V (_, Mu.Vunit)))) -> true
+    | _ -> false
+
+  (* [Esseq] is routed through {!build_sseq} so discarded units are elided at
+     construction; every other form is the plain structural map of {!expr_}. *)
+  let rec expr (Mu.Expr (loc, annots, _, e_)) : expr =
+    match e_ with
+    | Mu.Esseq (pat, e1, e2) -> build_sseq ~loc ~annots pat e1 (expr e2)
+    | _ -> { loc; annots; node = expr_ e_ }
+
+  (* Build the strong sequence [let strong pat = e1 in body], dropping a
+     discarded trailing [pure(unit)]. CN emits these unit "results" of void
+     statements everywhere; when [pat] is a wildcard, [e1]'s result is thrown
+     away, so if [e1]'s sequence tail is [pure(unit)] we splice [body] straight
+     into that slot ({!splice_unit_tail}) rather than bind a dead unit. The unit
+     node is never built and no second pass runs. Evaluation order and result are
+     unchanged; symbols being globally unique, extending an inner binder's scope
+     over [body] captures nothing. *)
+  and build_sseq ~loc ~annots pat e1 (body : expr) : expr =
+    let plain () =
+      { loc; annots; node = Esseq { pat = pattern pat; value = expr e1; body } }
+    in
+    if is_mu_wildcard pat then
+      match splice_unit_tail e1 ~body with Some e -> e | None -> plain ()
+    else plain ()
+
+  (* [Some e]: [e1] converted with its trailing [pure(unit)] — found along the
+     sequence's body spine — replaced by [body]. [None]: [e1] has no trailing
+     unit, nothing to drop. The [Option.map] short-circuits, so when the spine
+     does not bottom out in a unit, none of [e1]'s value sides are converted here
+     (the caller converts [e1] once, plainly); when it does, the spine is rebuilt
+     via {!build_sseq}, which re-elides any nested discards on the way. *)
+  and splice_unit_tail e1 ~(body : expr) : expr option =
+    if mu_is_pure_unit e1 then Some body
+    else
+      match e1 with
+      | Mu.Expr (loc, annots, _, Mu.Esseq (pat, a, b)) ->
+          Option.map
+            (fun tail -> build_sseq ~loc ~annots pat a tail)
+            (splice_unit_tail b ~body)
+      | _ -> None
+
+  (* [Esseq] never reaches here — {!expr} intercepts it — but the case is kept so
+     this stays a total [Mu.expr_ -> expr_] map. *)
   and expr_ = function
     | Mu.Epure pe -> Epure (pexpr pe)
     | Mu.Ememop (m, pes) -> Ememop (m, List.map pexpr pes)
