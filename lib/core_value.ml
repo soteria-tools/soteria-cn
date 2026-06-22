@@ -26,7 +26,7 @@ type t =
   | List of t list
   | Tuple of t list
   | Bool of T.sbool Typed.t
-[@@deriving show { with_path = true }]
+[@@deriving show { with_path = false }]
 
 let true_ = Bool Typed.v_true
 let false_ = Bool Typed.v_false

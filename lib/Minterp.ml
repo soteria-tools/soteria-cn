@@ -20,6 +20,8 @@ module InterpM = struct
       (s : (a, Error.with_trace, State.syn list) Csymex.Result.t) : a t =
     State.SM.lift s
 
+  let branches b = State.SM.branches b
+
   let[@inline] error (err : Error.t) : 'a t =
     lift_symex_res @@ Csymex.Result.error_with_loc err
 
@@ -50,6 +52,7 @@ module InterpM = struct
     let ( let* ) x f = bind f x
     let ( let+ ) x f = map f x
     let ( let*^ ) (x : 'a Csymex.t) (f : 'a -> 'b t) : 'b t = bind f (lift x)
+    let ( let+^ ) (x : 'a Csymex.t) (f : 'a -> 'b) : 'b t = map f (lift x)
 
     module Symex_syntax = Syntax.Symex_syntax
   end
@@ -58,6 +61,10 @@ module InterpM = struct
     open Syntax
 
     let alloc_ty ty = State.alloc_ty (Cn.Sctypes.to_ctype ty)
+
+    let alloc size =
+      let* size = CV.cast_int size in
+      State.alloc size
 
     let store ptr ty v =
       let* ptr = CV.cast_ptr ptr in
@@ -162,6 +169,15 @@ let eval_impl_call (i : CF.Implementation.implementation_constant)
     (args : Core_value.t list) : Core_value.t InterpM.t =
   match (i, args) with _ -> not_impl "unsupported impl call"
 
+let malloc_failure_case () =
+  if (* (Soteria_c_lib.Config.current ()).alloc_cannot_fail *) false then []
+  else
+    [
+      (fun () ->
+        let ptr = Typed.Ptr.null in
+        ok (Core_value.Obj (Ptr ptr)));
+    ]
+
 let conv_int ~(ty : CF.Ctype.ctype) v : Typed.(T.sint t) InterpM.t =
   let open Typed.Syntax in
   let open Typed.Infix in
@@ -185,44 +201,16 @@ let conv_int ~(ty : CF.Ctype.ctype) v : Typed.(T.sint t) InterpM.t =
       let signed = Layout.is_int_ty_signed ity in
       Typed.BitVec.fit_to ~signed new_size i
 
-let eval_pe_call (sym : Sym.t) (args : Core_value.t list) :
-    Core_value.t InterpM.t =
-  match (sym, args) with
-  | Symbol (_, _, SD_Id "conv_loaded_int"), [ ty; i ] -> (
-      let* ty = CV.cast_type ty in
-      match i with
-      | Loaded (Spec _) ->
-          let+ i = conv_int ~ty i in
-          Core_value.Loaded (Spec (Int i))
-      | Loaded Unspec -> ok (Core_value.Loaded Unspec)
-      | _ -> L.failwith "Invalid input to conv_loaded_int")
-  | Symbol (_, _, SD_Id "conv_int"), [ ty; i ] -> (
-      let* ty = CV.cast_type ty in
-      match i with
-      | Loaded (Spec _) | Obj (Int _) ->
-          let+ i = conv_int ~ty i in
-          Core_value.Loaded (Spec (Int i))
-      | Loaded Unspec -> ok (Core_value.Loaded Unspec)
-      | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
-  | Symbol (_, _, SD_Id "params_length"), [ Tuple l ] ->
-      ok @@ Core_value.c_int (List.length l)
-  | ( Symbol (_, _, SD_Id "params_nth"),
-      [ Tuple l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
-      let*^ i =
-        Typed.BitVec.to_z i
-        |> Csymex.of_opt_not_impl
-             ~msg:"params_nth: index is not a concrete integer"
-      in
-      let i = Z.to_int i in
-      ok @@ List.nth l i
-  | _ -> not_impl "unsupported pe call: %a" Sym.pp sym
-
 let eval_ctor (ctor : CF.Core.ctor) (v : Core_value.t list) :
     Core_value.t InterpM.t =
+  let open Core_value in
   match (ctor, v) with
-  | Cspecified, [ Obj v ] -> ok (Core_value.Loaded (Spec v))
-  | Cunspecified, _ -> ok (Core_value.Loaded Unspec)
-  | Ctuple, vs -> ok (Core_value.Tuple vs)
+  | Cspecified, [ Obj v ] -> ok (Loaded (Spec v))
+  | Cunspecified, _ -> ok (Loaded Unspec)
+  | Ctuple, vs -> ok (Tuple vs)
+  | Civsizeof, [ Type ty ] ->
+      let+^ size = Layout.size_of_s ty in
+      Obj (Int size)
   | _ -> not_impl "Unsupported constructor: %a" Mu.pp_ctor ctor
 
 let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
@@ -260,6 +248,17 @@ let cfunction (v : Core_value.t) =
   in
   ok (Core_value.cfunction fn)
 
+let eval_memop (memop : Symbol_std.t CF.Mem_common.generic_memop)
+    (args : Core_value.t list) : Core_value.t InterpM.t =
+  let open Typed.Infix in
+  match (memop, args) with
+  | PtrEq, [ p1; p2 ] ->
+      let* p1 = CV.cast_ptr p1 in
+      let* p2 = CV.cast_ptr p2 in
+      (* Is this correct? I forgot the semantics of pointer equality *)
+      ok (Core_value.Bool (p1 ==@ p2))
+  | _ -> not_impl "Unsupported memop: %a" Mu.pp_memop memop
+
 let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
   let open Core_value in
   match op with
@@ -267,7 +266,73 @@ let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
   | OpOr -> ok @@ Core_value.Bool.or_ lhs rhs
   | _ -> not_impl "eval_op: unsupported operator: %a" Mu.pp_binop op
 
-let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
+let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t
+    =
+  let@ () = with_loc ~loc:action.loc in
+  match action.action with
+  | Create { align; ty; prefix = _ } ->
+      let+ ptr = State.alloc_ty ty.node in
+      Core_value.Obj (Ptr ptr)
+  | Store { ptr; value; ty; _ } ->
+      let* ptr = eval_pexpr subst ptr in
+      let* value = eval_pexpr subst value in
+      let+ () = State.store ptr ty.node value in
+      Core_value.Unit
+  | Load { ptr; ty; _ } ->
+      let* ptr = eval_pexpr subst ptr in
+      State.load ptr ty.node
+  | Kill (_kind, ptr) ->
+      let* ptr = eval_pexpr subst ptr in
+      let+ () = State.free ptr in
+      Core_value.Unit
+  | _ -> not_impl "Unsupported action: %a" Mu.pp_action action
+
+and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
+    =
+  match (sym, args) with
+  | Symbol (_, _, SD_Id "conv_loaded_int"), [ ty; i ] -> (
+      let* ty = CV.cast_type ty in
+      match i with
+      | Loaded (Spec _) ->
+          let+ i = conv_int ~ty i in
+          Core_value.Loaded (Spec (Int i))
+      | Loaded Unspec -> ok (Core_value.Loaded Unspec)
+      | _ -> L.failwith "Invalid input to conv_loaded_int")
+  | Symbol (_, _, SD_Id "conv_int"), [ ty; i ] -> (
+      let* ty = CV.cast_type ty in
+      match i with
+      | Loaded (Spec _) | Obj (Int _) ->
+          let+ i = conv_int ~ty i in
+          Core_value.Loaded (Spec (Int i))
+      | Loaded Unspec -> ok (Core_value.Loaded Unspec)
+      | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
+  | Symbol (_, _, SD_Id "params_length"), [ Tuple l ] ->
+      ok @@ Core_value.c_int (List.length l)
+  | ( Symbol (_, _, SD_Id "params_nth"),
+      [ Tuple l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
+      let*^ i =
+        Typed.BitVec.to_z i
+        |> Csymex.of_opt_not_impl
+             ~msg:"params_nth: index is not a concrete integer"
+      in
+      let i = Z.to_int i in
+      ok @@ List.nth l i
+  | Symbol (_, _, SD_Id "malloc_proxy"), [ size ] ->
+      InterpM.branches
+        [
+          (fun () ->
+            let+ ptr = State.alloc size in
+            Core_value.Obj (Ptr ptr));
+        ]
+  | sym, args -> (
+      match Sym.Map.find_opt sym (Ctx.get_prog ()).funs with
+      | None -> not_impl "Couldn't resolve function: %a" Sym.pp sym
+      | Some s ->
+          let prog = Ctx.get_prog () in
+          let fn = Sym.Map.find sym prog.funs in
+          exec_fun fn args)
+
+and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
   let@ () = with_loc ~loc:pexpr.loc in
   match pexpr.node with
@@ -280,7 +345,7 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEcall (generic_name, args) -> (
       let* args = map_list ~f:(eval_pexpr subst) args in
       match generic_name with
-      | Sym s -> eval_pe_call s args
+      | Sym s -> eval_call s args
       | Impl i -> eval_impl_call i args)
   | PEctor (ctor, pes) ->
       let* vs = map_list ~f:(eval_pexpr subst) pes in
@@ -329,42 +394,27 @@ let rec eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
           Core_value.Loaded (Spec (Int i))
       | Loaded Unspec -> ok (Core_value.Loaded Unspec)
       | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
+  | PEmember_shift { ptr; tag; member } ->
+      let* ptr = eval_pexpr subst ptr in
+      let* ptr = CV.cast_ptr ptr in
+      let ty = CF.Ctype.(Ctype ([], Struct tag)) in
+      let+^ mem_ofs = Layout.member_ofs member ty in
+      Core_value.Obj (Ptr (Typed.Ptr.add_ofs ptr mem_ofs))
+  | PEmemop _ -> not_impl "PEmemop"
   | PEconstrained _ -> not_impl "PEconstrainted"
   | PEerror _ -> not_impl "PEerror"
-  | PEmember_shift _ -> not_impl "PEmember_shift"
   | PEarray_shift _ -> not_impl "PEarray_shift"
   | PEwrapI _ -> not_impl "PEwrapI"
-  | PEmemop _ -> not_impl "PEmemop"
   | PEstruct _ -> not_impl "PEstruct"
   | PEunion _ -> not_impl "PEunion"
   | PEmemberof _ -> not_impl "PEmemberof"
 
-let eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t =
-  let@ () = with_loc ~loc:action.loc in
-  match action.action with
-  | Create { align; ty; prefix = _ } ->
-      let+ ptr = State.alloc_ty ty.node in
-      Core_value.Obj (Ptr ptr)
-  | Store { ptr; value; ty; _ } ->
-      let* ptr = eval_pexpr subst ptr in
-      let* value = eval_pexpr subst value in
-      let+ () = State.store ptr ty.node value in
-      Core_value.Unit
-  | Load { ptr; ty; _ } ->
-      let* ptr = eval_pexpr subst ptr in
-      State.load ptr ty.node
-  | Kill (_kind, ptr) ->
-      let* ptr = eval_pexpr subst ptr in
-      let+ () = State.free ptr in
-      Core_value.Unit
-  | _ -> not_impl "Unsupported action: %a" Mu.pp_action action
-
-let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
-    (body : expr) : Core_value.t ExprM.t =
+and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
+    Core_value.t ExprM.t =
   let open ExprM.Syntax in
   [%l.trace "Evaluating expr: %a" Mu.pp_expr body];
   let@ () = with_loc ~loc:body.loc in
-  [%l.debug "@[Substitution:@ %a@]" Subst.pp subst];
+  [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
   (* let* () =
     if List.is_empty body.annots then return ()
     else Fmt.kstr not_impl "annotations: %a" 
@@ -404,14 +454,16 @@ let rec eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t)
       let* args = map_list ~f:(eval_pexpr subst) args in
       match fn with
       | Obj (Fn sym) | Loaded (Spec (Fn sym)) ->
-          let prog = Ctx.get_prog () in
-          let fn = Sym.Map.find sym prog.funs in
-          let+ v = exec_fun fn args in
+          let+ v = eval_call sym args in
           ExprM.Normal v
       | _ -> not_impl "Dynamic call %a" Core_value.pp fn)
   | Eaction action ->
       let+ v = eval_action subst action in
       ExprM.Normal v
+  | Ememop (memop, args) ->
+      let* args = map_list ~f:(eval_pexpr subst) args in
+      let+ res = eval_memop memop args in
+      ExprM.Normal res
   | _ -> not_impl "Unsupported expr: %a" Mu.pp_expr body
 
 and exec_fun (fn : Mu.fun_map_decl) params =

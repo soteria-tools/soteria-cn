@@ -106,13 +106,18 @@ let exec_main config c_config fuel file =
   List.iter
     (let open Soteria_c_lib.Error.Diagnostic in
      function
-     | Compo_res.Ok _, _ -> ()
+     | Compo_res.Ok (v, _), _ ->
+         Fmt.pr "Successfully finished with %a@\n" Core_value.pp v
      | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), st)), _ ->
          has_errors := true;
          print_diagnostic ~fid:"main" ~call_trace ~error:err
      | Error (Gave_up msg), _ ->
+         has_errors := true;
          print_diagnostic ~fid:"main"
            ~call_trace:Soteria.Terminal.Call_trace.empty ~error:(`Gave_up msg)
      | Missing _, _ -> Fmt.failwith "Can't miss at the moment")
     results;
-  if !has_errors then Ok () else Error "Bugs found"
+  if !has_errors then Error "Didn't finish"
+  else (
+    Fmt.pr "Finished without errors!";
+    Ok ())
