@@ -5,22 +5,23 @@
 (generate_opam_files true)
 
 (source
- (github username/reponame))
+ (github soteria-tools/soteria-cn))
 
-(authors "Author Name <author@example.com>")
+(authors "Sacha-Élie Ayoun <sachaayoun@gmail.com>")
 
-(maintainers "Maintainer Name <maintainer@example.com>")
+(maintainers "Sacha-Élie Ayoun <sachaayoun@gmail.com>")
 
-(license LICENSE)
+(license Apache-2.0)
 
-(documentation https://url/to/documentation)
+(documentation https://github.com/soteria-tools/soteria-cn)
 
 (package
  (name soteria-cn)
- (synopsis "A short synopsis")
- (description "A longer description")
+ (synopsis "CN but based on Soteria")
+ (description
+  "This is a prototype for a version of the CN C verifier that is based on Soteria. It is not yet fully functional, but it is a work in progress.")
  (depends cn soteria soteria-c cerberus-lib fmt ocaml)
  (tags
-  ("add topics" "to describe" your project)))
+  (verification c soteria analysis "separation logic")))
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/reference/dune-project/index.html
