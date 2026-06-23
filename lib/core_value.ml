@@ -218,6 +218,16 @@ let lt ~signed lhs rhs =
       Bool (Typed.Float.lt f1 f2)
   | _ -> L.failwith "Core_value.lt: not comparable: %a, %a" pp lhs pp rhs
 
+let leq ~signed lhs rhs =
+  match (lhs, rhs) with
+  | ( (Obj (Int i1) | Loaded (Spec (Int i1))),
+      (Obj (Int i2) | Loaded (Spec (Int i2))) ) ->
+      Bool (Typed.BitVec.leq ~signed i1 i2)
+  | ( (Obj (Float f1) | Loaded (Spec (Float f1))),
+      (Obj (Float f2) | Loaded (Spec (Float f2))) ) ->
+      Bool (Typed.Float.leq f1 f2)
+  | _ -> L.failwith "Core_value.lt: not comparable: %a, %a" pp lhs pp rhs
+
 module Bool = struct
   let not b =
     match b with

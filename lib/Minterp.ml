@@ -88,6 +88,8 @@ module ExprM = struct
   type 'a exec_r = Normal of 'a | Returned of Core_value.t
   [@@deriving show { with_path = false }]
 
+  let returned_value = function Returned v -> v | Normal _ -> Core_value.Unit
+
   type 'a t = 'a exec_r InterpM.t
 
   let bind (f : 'a -> 'b t) (m : 'a t) : 'b t =
@@ -119,44 +121,6 @@ end
 
 open InterpM
 open Syntax
-
-module Subst = struct
-  include Symbol_std.Map
-
-  type nonrec t = Core_value.t t
-
-  let pp ft t =
-    Fmt.iter_bindings ~sep:Fmt.cut iter
-      (fun ft (k, v) -> Fmt.pf ft "%a -> %a" Symbol_std.pp k Core_value.pp v)
-      ft t
-
-  let rec assign_pattern subst (pat : pattern) (v : Core_value.t) : t Csymex.t =
-    let@@ () = Csymex.with_loc ~loc:pat.loc in
-    match pat.node with
-    | CaseBase (Some sym, _) -> return (add sym v subst)
-    | CaseBase (None, _) -> return subst
-    | CaseCtor (ctor, pats) -> (
-        match (ctor, v, pats) with
-        | Cspecified, Loaded (Spec v'), [ p ] -> assign_pattern subst p (Obj v')
-        | Ctuple, Tuple vs, pats' when List.compare_lengths vs pats' = 0 ->
-            Csymex.fold_list (List.combine pats' vs) ~init:subst
-              ~f:(fun acc (p, v) -> assign_pattern acc p v)
-        | _ ->
-            Fmt.kstr Csymex.not_impl
-              "@[<v 2>assign_pattern: unsupported constructor pattern@ CTOR: \
-               %a@ VALUE: %a@ PATTERNS: %a@]"
-              Mu.pp_ctor ctor Core_value.pp v
-              (Fmt.Dump.list Mu.pp_pattern)
-              pats)
-
-  let from_args (args : Mu.arguments) (params : Core_value.t list) : t =
-    List.fold_left2
-      (fun acc ((arg, _) : Mu.computational_arg * _) param ->
-        match arg with
-        | Computational (sym, _) -> add sym param acc
-        | Ghost _ -> L.failwith "Unsupported ghost arguments")
-      empty args.comp params
-end
 
 let error_of_ub (_ub : CF.Undefined.undefined_behaviour) : Error.t =
   `UBPointerArithmetic
@@ -274,6 +238,7 @@ let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
   | OpLt ->
       (* FIXME: I think this is wrong depending on signedness of values? We'd need to pass types here, as in Soteria C. *)
       ok @@ Core_value.lt ~signed:false lhs rhs
+  | OpLe -> ok @@ Core_value.leq ~signed:false lhs rhs
   | _ -> not_impl "eval_op: unsupported operator: %a" Mu.pp_binop op
 
 let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t

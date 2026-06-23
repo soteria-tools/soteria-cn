@@ -33,6 +33,28 @@ module Exec_main = struct
       (Term.map result_to_int term)
 end
 
+module Verify = struct
+  let file_arg = Arg.(value & pos 0 (some file) None & info ~docv:"FILE" [])
+
+  let term =
+    Term.(
+      const Soteria_cn.Driver.verify_main
+      $ Soteria.Config.cmdliner_term ()
+      $ Soteria_c_lib.Config.cmdliner_term ()
+      $ Soteria.Symex.Fuel_gauge.Cli.term
+          ~default:Soteria.Symex.Fuel_gauge.infinite ()
+      $ file_arg)
+
+  let cmd =
+    Cmd.v
+      (Cmd.info
+         ~doc:
+           "Verify each (non-trusted) function of a program against its CN \
+            specification."
+         "verify")
+      (Term.map result_to_int term)
+end
+
 module Show_mucore = struct
   let file_arg = Arg.(value & pos 0 (some file) None & info ~docv:"FILE" [])
 
@@ -53,5 +75,6 @@ end
 let arg = try Sys.argv.(1) with _ -> failwith "No argument provided"
 
 let cmd =
-  Cmd.group (Cmd.info "soteria-cn") [ Exec_main.cmd; Show_mucore.cmd ]
+  Cmd.group (Cmd.info "soteria-cn")
+    [ Exec_main.cmd; Verify.cmd; Show_mucore.cmd ]
 let () = exit @@ Cmd.eval' cmd
