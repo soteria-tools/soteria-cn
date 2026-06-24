@@ -6,10 +6,10 @@ open Csymex
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
-exception Not_implemented
+exception Not_implemented of annot
 
 let rec eval_annot (subst : Subst.t) (annot : annot) : Core_value.t =
-  let (IT (it, bt, loc)) = annot in
+  let (IT (it, _bt, _loc)) = annot in
   match it with
   | Sym s -> Subst.find s subst
   | Tuple ts ->
@@ -23,15 +23,12 @@ let rec eval_annot (subst : Subst.t) (annot : annot) : Core_value.t =
       let v1 = eval_annot subst t1 in
       let v2 = eval_annot subst t2 in
       Core_value.Bool.and_ v1 v2
-  | _ ->
-      ignore @@ failwith "B";
-      raise Not_implemented
+  | _ -> raise (Not_implemented annot)
 
 let eval_annot subst term =
-  try Some (eval_annot subst term)
-  with Not_implemented ->
-    ignore @@ failwith "A";
-    None
+  try Csymex.return (eval_annot subst term)
+  with Not_implemented annot ->
+    Fmt.kstr Csymex.not_impl "eval_annot %a" Mu.pp_it annot
 
 let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
   let open Syntax in
@@ -39,7 +36,7 @@ let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
   | Bool ->
       let+ b = Csymex.nondet Typed.t_bool in
       Core_value.Bool b
-  | Bits (sign, size_bits) ->
+  | Bits (_sign, size_bits) ->
       let+ v = Csymex.nondet (Typed.t_int size_bits) in
       Core_value.(Obj (Int v))
   | Loc _ ->
@@ -60,8 +57,8 @@ let produce_computational_arg (subst, state)
   let subst = Subst.add sym v subst in
   (subst, state)
 
-let produce_logical_arg (subst, state)
-    ((arg, _loc) : Mu.logical_arg * Cn.Locations.info) :
+let produce_logical_arg (_subst, _state)
+    ((_arg, _loc) : Mu.logical_arg * Cn.Locations.info) :
     (Subst.t * State.t option) Csymex.Producer.t =
   Producer.lift @@ not_impl "produce_logical_arg: not implemented yet"
 
@@ -79,11 +76,7 @@ let produce_arguments (args : Mu.arguments) :
 let consume_annot (subst, state) annot =
   let open Csymex.Consumer in
   let open Syntax in
-  let*^ v =
-    eval_annot subst annot
-    |> Csymex.of_opt_not_impl
-         ~msg:(Fmt.str "Unsupported annot: %a" Mu.pp_it annot)
-  in
+  let*^ v = eval_annot subst annot in
   let*^ v =
     Core_value.cast_bool v
     |> of_opt_not_impl ~msg:"consume_annot: not a boolean"

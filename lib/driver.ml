@@ -130,7 +130,7 @@ let exec_main (config : Soteria.Config.t) c_config fuel file =
     (function
       | Compo_res.Ok (v, _), _ ->
           Fmt.pr "Successfully finished with %a@\n" Core_value.pp v
-      | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), st)), _ ->
+      | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), _st)), _ ->
           has_errors := true;
           Verify.print_diagnostic ~fid:"main" ~call_trace ~error:err
       | Error (Gave_up msg), _ ->

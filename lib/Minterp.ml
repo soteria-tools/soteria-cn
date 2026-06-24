@@ -88,7 +88,7 @@ module InterpM = struct
         (function
           | Compo_res.Ok r -> Compo_res.Ok r
           | Error (e, tr) -> Error ((e :> error), tr)
-          | Missing f -> Error (`Missing_resource, trace))
+          | Missing _ -> Error (`Missing_resource, trace))
         m
 
     let alloc_ty ty =
@@ -260,7 +260,7 @@ let eval_memop (memop : Symbol_std.t CF.Mem_common.generic_memop)
       let* p2 = CV.cast_ptr p2 in
       (* Is this correct? I forgot the semantics of pointer equality *)
       ok (Core_value.Bool (p1 ==@ p2))
-  | (PtrWellAligned | PtrValidForDeref), args ->
+  | (PtrWellAligned | PtrValidForDeref), _args ->
       (* Pointer validity for dereference should be handled by the state.
          For alignment, we could also do the Soteria Rust trick of embedding the alignment in the pointer representation. *)
       ok Core_value.true_
@@ -281,7 +281,7 @@ let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t
     =
   let@ () = with_loc ~loc:action.loc in
   match action.action with
-  | Create { align; ty; prefix = _ } ->
+  | Create { align = _; ty; prefix = _ } ->
       let+ ptr = State.alloc_ty ty.node in
       Core_value.Obj (Ptr ptr)
   | Store { ptr; value; ty; _ } ->
@@ -339,9 +339,7 @@ and eval_call ~loc (sym : Sym.t) (args : Core_value.t list) :
   | sym, args -> (
       match Sym.Map.find_opt sym (Ctx.get_prog ()).funs with
       | None -> not_impl "Couldn't resolve function: %a" Sym.pp sym
-      | Some s ->
-          let prog = Ctx.get_prog () in
-          let fn = Sym.Map.find sym prog.funs in
+      | Some fn ->
           with_extra_call_trace ~loc ~msg:"Called from here" @@ exec_fun fn args
       )
 
@@ -465,7 +463,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
       let guard = Core_value.Bool.to_sbool guard in
       if%sat guard then eval_expr ~labels subst then_
       else eval_expr ~labels subst else_
-  | Eccall { ty; fn; args; specs = _ } -> (
+  | Eccall { ty = _; fn; args; specs = _ } -> (
       let* fn = eval_pexpr subst fn in
       let* args = map_list ~f:(eval_pexpr subst) args in
       match fn with
@@ -487,10 +485,10 @@ and exec_fun (fn : Mu.fun_map_decl) params =
 
   match fn with
   | ProcDecl _ -> not_impl "exec_fn: ProcDecl"
-  | Proc { loc; args; body; labels; return_type; trusted } -> (
+  | Proc { loc; args; body; labels; return_type = _; trusted } -> (
       let@ () = with_loc ~loc in
       let* () = stop_if_unsupported args trusted in
       let subst = Subst.from_args args params in
       let+ v = eval_expr ~labels subst body in
       [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
-      match v with Normal v -> Core_value.Unit | Returned v -> v)
+      match v with Normal _ -> Core_value.Unit | Returned v -> v)

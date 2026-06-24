@@ -6,5 +6,6 @@
   soteria-c
   cerberus-lib.frontend
   cerberus-lib.backend_common)
+ (flags :standard -w +27)
  (preprocess
   (pps soteria.ppx ppx_deriving.std)))
