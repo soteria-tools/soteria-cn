@@ -7,8 +7,19 @@ open Syntax
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
+type cons_fail_with_trace =
+  Csymex.cons_fail * Cerb_location.t Soteria.Terminal.Call_trace.t
+
 (* Sound only in OX mode, of course *)
-let logic_assert v = Csymex.assert_or_error v (`Lfail v :> Csymex.cons_fail)
+let logic_assert v =
+  let*- err = Csymex.assert_or_error v (`Lfail v :> Csymex.cons_fail) in
+  let* loc = get_loc () in
+  let err =
+    ( err,
+      Soteria.Terminal.Call_trace.singleton ~loc
+        ~msg:"Could not prove this hold" () )
+  in
+  Result.error err
 
 let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
   let open Syntax in
@@ -29,7 +40,6 @@ let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
 let produce_computational_arg (subst, state)
     ((arg, _loc) : Mu.computational_arg * Cn.Locations.info) :
     (Subst.t * State.t option) Csymex.t =
-  (* let@ () = Producer.with_loc ~loc:(snd loc) in *)
   let (Computational (sym, ty) | Ghost (sym, ty)) = arg in
   let+ v = nondet_bt ty in
   let subst = Subst.add sym v subst in
@@ -38,7 +48,6 @@ let produce_computational_arg (subst, state)
 let produce_logical_arg (_subst, _state)
     ((_arg, _loc) : Mu.logical_arg * Cn.Locations.info) :
     (Subst.t * State.t option) Csymex.t =
-  let@@ () = Csymex.with_loc ~loc:(fst _loc) in
   not_impl "produce_logical_arg: not implemented yet"
 
 let produce_arguments (args : Mu.arguments) :
@@ -50,7 +59,9 @@ let produce_arguments (args : Mu.arguments) :
   in
   fold_list ~init:(subst, state) ~f:produce_logical_arg args.logic
 
-let consume_annot (subst, state) annot =
+let consume_annot (subst, state) (annot : annot) =
+  let (IT (_, _, loc)) = annot in
+  let@@ () = Csymex.with_loc ~loc in
   let* v = Subst.eval_annot subst annot in
   let* v =
     Core_value.cast_bool v
@@ -60,24 +71,30 @@ let consume_annot (subst, state) annot =
   (subst, state)
 
 let consume_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
-    (Subst.t * State.t option, Csymex.cons_fail, State.syn list) Csymex.Result.t
-    =
+    ( Subst.t * State.t option,
+      cons_fail_with_trace,
+      State.syn list )
+    Csymex.Result.t =
   match lc with
   | T it -> consume_annot (subst, state) it
   | Forall _ -> not_impl "consume_logical_constraint: Forall"
 
 let consume_logical_arg (subst, state)
     ((arg, _loc) : Mu.logical_arg * Cn.Locations.info) :
-    (Subst.t * State.t option, Csymex.cons_fail, State.syn list) Csymex.Result.t
-    =
+    ( Subst.t * State.t option,
+      cons_fail_with_trace,
+      State.syn list )
+    Csymex.Result.t =
   match arg with
   | Define _ -> not_impl "consume_logical_arg: Define"
   | Resource _ -> not_impl "consume_logical_arg: Resource"
   | Constraint lc -> consume_logical_constraint (subst, state) lc
 
 let consume_return_type (ty : Mu.return_type) (ret : Core_value.t) subst state :
-    (Subst.t * State.t option, Csymex.cons_fail, State.syn list) Csymex.Result.t
-    =
+    ( Subst.t * State.t option,
+      cons_fail_with_trace,
+      State.syn list )
+    Csymex.Result.t =
   [%l.trace "Consuming return type: %a" Mu.pp_return_type ty];
   let subst = Subst.add (fst ty.ret) ret subst in
   Result.fold_list ~init:(subst, state) ~f:consume_logical_arg ty.logic

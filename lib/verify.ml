@@ -25,14 +25,9 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
     |> Result.map_error (fun ((err, tr), _) -> ((err :> Minterp.error), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
-  let postcond_call_trace () =
-    Soteria.Terminal.Call_trace.singleton ~loc:(fst return_type.ret_info)
-      ~msg:"Consuming postcondition" ()
-  in
   let** _, st =
     Cn_assert.consume_return_type return_type ret csubst state
-    |> Result.map_error (fun err ->
-        ((err :> Minterp.error), postcond_call_trace ()))
+    |> Result.map_error (fun (err, tr) -> ((err :> Minterp.error), tr))
   in
   let fn_call_trace elements =
     elements
