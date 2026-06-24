@@ -148,7 +148,7 @@ let obj_of_cval (v : T.cval Typed.t) : obj =
   | Svalue.TFloat _ -> Float (Typed.cast v)
   | ty ->
       L.failwith "Core_value.of_agv: unexpected basic value type: %a"
-        Svalue.pp_ty ty
+        Typed.Svalue.pp_ty ty
 
 (* Aggregate values carry neither array element types nor struct tags/field
    types, so the expected C type [ty] is needed to rebuild them. *)
@@ -203,6 +203,9 @@ let cast_type (v : t) : Ctype.ctype option =
 let cast_ptr (v : t) : T.sptr Typed.t option =
   match v with Obj (Ptr p) | Loaded (Spec (Ptr p)) -> Some p | _ -> None
 
+let cast_bool (v : t) : T.sbool Typed.t option =
+  match v with Bool b -> Some b | _ -> None
+
 let c_int (i : int) : t =
   Obj (Int (Typed.BitVec.mk_masked Typed.c_int_bits (Z.of_int i)))
 
@@ -233,6 +236,11 @@ module Bool = struct
     match b with
     | Bool b -> Bool (Typed.Bool.not b)
     | _ -> L.failwith "not: not a boolean %a" pp b
+
+  let and_ b1 b2 =
+    match (b1, b2) with
+    | Bool b1, Bool b2 -> Bool (Typed.Bool.and_ b1 b2)
+    | _ -> L.failwith "and_: not booleans: %a, %a" pp b1 pp b2
 
   let of_bool b = Bool (Typed.Bool.of_bool b)
 

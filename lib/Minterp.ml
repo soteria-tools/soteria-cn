@@ -237,8 +237,8 @@ let eval_op (op : CF.Core.binop) (lhs : Core_value.t) (rhs : Core_value.t) =
   | OpOr -> ok @@ Core_value.Bool.or_ lhs rhs
   | OpLt ->
       (* FIXME: I think this is wrong depending on signedness of values? We'd need to pass types here, as in Soteria C. *)
-      ok @@ Core_value.lt ~signed:false lhs rhs
-  | OpLe -> ok @@ Core_value.leq ~signed:false lhs rhs
+      ok @@ Core_value.lt ~signed:true lhs rhs
+  | OpLe -> ok @@ Core_value.leq ~signed:true lhs rhs
   | _ -> not_impl "eval_op: unsupported operator: %a" Mu.pp_binop op
 
 let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t
@@ -388,7 +388,7 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
 and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
     Core_value.t ExprM.t =
   let open ExprM.Syntax in
-  [%l.trace "Evaluating expr: %a" Mu.pp_expr body];
+  [%l.trace "@[<v 2>Evaluating expr:@ %a@]" Mu.pp_expr body];
   let@ () = with_loc ~loc:body.loc in
   [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
   let*^ () = Csymex.consume_fuel_steps 1 in

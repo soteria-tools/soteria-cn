@@ -3,6 +3,36 @@ open Soteria_c_lib
 module Mu = Usable_mucore
 open Csymex
 
+type term = Cn.(BaseTypes.t Terms.term)
+type annot = Cn.(BaseTypes.t Terms.annot)
+
+exception Not_implemented
+
+let rec eval_annot (subst : Subst.t) (annot : annot) : Core_value.t =
+  let (IT (it, bt, loc)) = annot in
+  match it with
+  | Sym s -> Subst.find s subst
+  | Tuple ts ->
+      let vs = List.map (eval_annot subst) ts in
+      Core_value.Tuple vs
+  | Binop (LE, t1, t2) ->
+      let v1 = eval_annot subst t1 in
+      let v2 = eval_annot subst t2 in
+      Core_value.leq ~signed:true v1 v2
+  | Binop (And, t1, t2) ->
+      let v1 = eval_annot subst t1 in
+      let v2 = eval_annot subst t2 in
+      Core_value.Bool.and_ v1 v2
+  | _ ->
+      ignore @@ failwith "B";
+      raise Not_implemented
+
+let eval_annot subst term =
+  try Some (eval_annot subst term)
+  with Not_implemented ->
+    ignore @@ failwith "A";
+    None
+
 let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
   let open Syntax in
   match bt with
@@ -41,9 +71,20 @@ let produce_arguments (args : Mu.arguments) :
   in
   fold_list ~init:(subst, state) ~f:produce_logical_arg args.logic
 
-let consume_annot (subst, state) (annot : Cn.(BaseTypes.t Terms.annot)) =
-  Consumer.lift
-  @@ Fmt.kstr not_impl "consume_term: %a" Mu.(pp_pp Cn.Terms.pp) annot
+let consume_annot (subst, state) annot =
+  let open Csymex.Consumer in
+  let open Syntax in
+  let*^ v =
+    eval_annot subst annot
+    |> Csymex.of_opt_not_impl
+         ~msg:(Fmt.str "Unsupported annot: %a" Mu.pp_it annot)
+  in
+  let*^ v =
+    Core_value.cast_bool v
+    |> of_opt_not_impl ~msg:"consume_annot: not a boolean"
+  in
+  let+ () = Csymex.Consumer.assert_pure v in
+  (subst, state)
 
 let consume_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
     (Subst.t * State.t option, _) Csymex.Consumer.t =
@@ -61,6 +102,7 @@ let consume_logical_arg (subst, state)
 
 let consume_return_type (ty : Mu.return_type) (ret : Core_value.t) subst state :
     (Subst.t * State.t option, State.syn list) Csymex.Consumer.t =
+  [%l.trace "Consuming return type: %a" Mu.pp_return_type ty];
   let open Csymex.Consumer in
   let subst = Subst.add (fst ty.ret) ret subst in
   fold_list ~init:(subst, state) ~f:consume_logical_arg ty.logic

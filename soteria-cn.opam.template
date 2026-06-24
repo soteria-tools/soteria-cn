@@ -1,6 +1,6 @@
 pin-depends: [
   ["cn.~dev" "git+https://github.com/rems-project/cn#8658e0c3cf6b7a20e2fbb2c239046cf5724e2f93"]
-  ["soteria.~dev" "git+https://github.com/soteria-tools/soteria#89e2b6eaadc691e8d5de454d5e656777e4fba743"]
+  ["soteria.~dev" "../soteria"]
   ["cerberus-lib.~dev" "git+https://github.com/rems-project/cerberus.git#e88d46c3ed65a198ee14aaebaad80e3a005cf3fb"]
-  ["soteria-c.~dev" "git+https://github.com/soteria-tools/soteria#89e2b6eaadc691e8d5de454d5e656777e4fba743"]
+  ["soteria-c.~dev" "../soteria"]
 ]
