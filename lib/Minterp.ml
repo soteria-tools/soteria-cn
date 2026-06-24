@@ -20,6 +20,11 @@ module InterpM = struct
       (s : (a, Error.with_trace, State.syn list) Csymex.Result.t) : a t =
     State.SM.lift s
 
+  let with_extra_call_trace ~loc ~msg : 'a t -> 'a t =
+    map_error @@ fun e ->
+    let elem = Soteria.Terminal.Call_trace.mk_element ~loc ~msg () in
+    Error.add_to_call_trace e elem
+
   let branches b = State.SM.branches b
 
   let[@inline] error (err : Error.t) : 'a t =
@@ -262,8 +267,8 @@ let rec eval_action (subst : Subst.t) (action : action) : Core_value.t InterpM.t
       Core_value.Unit
   | _ -> not_impl "Unsupported action: %a" Mu.pp_action action
 
-and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
-    =
+and eval_call ~loc (sym : Sym.t) (args : Core_value.t list) :
+    Core_value.t InterpM.t =
   match (sym, args) with
   | Symbol (_, _, SD_Id "conv_loaded_int"), [ ty; i ] -> (
       let* ty = CV.cast_type ty in
@@ -306,7 +311,8 @@ and eval_call (sym : Sym.t) (args : Core_value.t list) : Core_value.t InterpM.t
       | Some s ->
           let prog = Ctx.get_prog () in
           let fn = Sym.Map.find sym prog.funs in
-          exec_fun fn args)
+          with_extra_call_trace ~loc ~msg:"Called from here" @@ exec_fun fn args
+      )
 
 and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   [%l.trace "Evaluating pexpr: %a" Mu.pp_pexpr pexpr];
@@ -321,7 +327,7 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEcall (generic_name, args) -> (
       let* args = map_list ~f:(eval_pexpr subst) args in
       match generic_name with
-      | Sym s -> eval_call s args
+      | Sym s -> eval_call ~loc:pexpr.loc s args
       | Impl i -> eval_impl_call i args)
   | PEctor (ctor, pes) ->
       let* vs = map_list ~f:(eval_pexpr subst) pes in
@@ -433,7 +439,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
       let* args = map_list ~f:(eval_pexpr subst) args in
       match fn with
       | Obj (Fn sym) | Loaded (Spec (Fn sym)) ->
-          let+ v = eval_call sym args in
+          let+ v = eval_call ~loc:body.loc sym args in
           ExprM.Normal v
       | _ -> not_impl "Dynamic call %a" Core_value.pp fn)
   | Eaction action ->
@@ -447,6 +453,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
 
 and exec_fun (fn : Mu.fun_map_decl) params =
   [%l.debug "@[Executing function:@ %a@]" Mu.pp_fun_map_decl fn];
+
   match fn with
   | ProcDecl _ -> not_impl "exec_fn: ProcDecl"
   | Proc { loc; args; body; labels; return_type; trusted } -> (

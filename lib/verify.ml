@@ -9,9 +9,15 @@ module Or_gave_up = Soteria.Symex.Or_gave_up
 
 type error = [ Error.t | Csymex.cons_fail ]
 
+let with_extra_call_trace ~loc ~msg : 'a Csymex.t -> 'a Csymex.t =
+  Csymex.Result.map_error @@ fun (e, tr) ->
+  let elem = Soteria.Terminal.Call_trace.mk_element ~loc ~msg () in
+  (e, elem :: tr)
+
 let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let open Csymex in
   let open Syntax in
+  let@@ () = with_extra_call_trace ~loc ~msg:"Verifying function" in
   let lsubst = Csymex.Value.Expr.Subst.empty in
   let* (csubst, state), lsubst =
     Producer.run ~subst:lsubst (Cn_assert.produce_arguments args)
@@ -19,13 +25,17 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let** result, state =
     State.SM.Result.run_with_state ~state
     @@ Minterp.eval_expr ~labels csubst body
-    |> Result.map_error (fun ((err, _), _) -> (err :> error))
+    |> Result.map_error (fun ((err, tr), _) -> ((err :> error), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
+  let postcond_call_trace () =
+    Soteria.Terminal.Call_trace.singleton ~loc:(fst return_type.ret_info)
+      ~msg:"Consuming postcondition" ()
+  in
   let++ _ =
     Consumer.run ~subst:lsubst
       (Cn_assert.consume_return_type return_type ret csubst state)
-    |> Result.map_error (fun err -> (err :> error))
+    |> Result.map_error (fun err -> ((err :> error), postcond_call_trace ()))
   in
   ()
 
@@ -39,19 +49,20 @@ let severity_of_error : error -> Diagnostic.severity = function
   | #Error.t as e -> Error.severity e
   | #Csymex.cons_fail -> Diagnostic.Error
 
-(* Print a [Soteria.Terminal.Diagnostic] for one symbolic-execution outcome.
-   A branch that terminated without an error nor a give-up is a successful
-   verification of that path, reported as a [Note]. *)
-let print_result ((res, _pc) : (_, error Or_gave_up.t, _) Compo_res.t * _) =
+let print_diagnostic ~fid ~call_trace ~error =
+  let msg = Fmt.str "%a in %s" pp_error error fid in
+  Soteria.Terminal.Diagnostic.print_diagnostic ~call_trace
+    ~as_ranges:Error.Diagnostic.as_ranges ~msg
+    ~severity:(severity_of_error error)
+
+let print_errors ~entry_point (res : (_, _, _) Compo_res.t) =
   match res with
-  | Compo_res.Ok () ->
-      Diagnostic.print_diagnostic_simple ~severity:Note "success"
-  | Compo_res.Error (Or_gave_up.E err) ->
-      Diagnostic.print_diagnostic_simple ~severity:(severity_of_error err)
-        (Fmt.to_to_string pp_error err)
+  | Compo_res.Ok () -> ()
+  | Compo_res.Error (Or_gave_up.E (err, trace)) ->
+      print_diagnostic ~fid:entry_point ~call_trace:trace ~error:err
   | Compo_res.Error (Or_gave_up.Gave_up msg) ->
-      Diagnostic.print_diagnostic_simple ~severity:Warning
-        (Fmt.str "Analysis gave up: %s" msg)
+      print_diagnostic ~fid:entry_point
+        ~call_trace:Soteria.Terminal.Call_trace.empty ~error:(`Gave_up msg)
   | Compo_res.Missing _ ->
       Diagnostic.print_diagnostic_simple ~severity:Error
         "Missing resource (under-specified)"
@@ -76,8 +87,16 @@ let verify_prog ~fuel (prog : Mu.file) : (unit, string) Result.t =
     (fun name decl ->
       match decl with
       | Proc { trusted = Checked; args; return_type; body; labels; loc } ->
+          Fmt.pr "Verifying function %a...\n" Sym.pp_sym_hum name;
+          let name_str = Fmt.str "%a" Sym.pp_sym_hum name in
+          let has_bugs = ref false in
           verify_fn ~fuel ~loc name args return_type labels body
-          |> List.iter print_result
+          |> List.iter (fun (r, _pc) ->
+              print_errors ~entry_point:name_str r;
+              if not (Compo_res.is_ok r) then has_bugs := true);
+          if not !has_bugs then
+            Fmt.pr "%a\n" Soteria.Logs.Printers.pp_ok
+              (Fmt.str "Successfully verified %a" Sym.pp_sym_hum name)
       | Proc { trusted = Trusted loc; _ } ->
           L.info (fun m ->
               m "Skipping trusted function %a (%a)" Sym.pp name pp_loc loc)
