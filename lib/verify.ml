@@ -7,8 +7,6 @@ open Mu
 module Diagnostic = Soteria.Terminal.Diagnostic
 module Or_gave_up = Soteria.Symex.Or_gave_up
 
-type error = [ Error.t | Csymex.cons_fail ]
-
 let with_extra_call_trace ~loc ~msg : 'a Csymex.t -> 'a Csymex.t =
   Csymex.Result.map_error @@ fun (e, tr) ->
   let elem = Soteria.Terminal.Call_trace.mk_element ~loc ~msg () in
@@ -25,7 +23,7 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let** result, state =
     State.SM.Result.run_with_state ~state
     @@ Minterp.eval_expr ~labels csubst body
-    |> Result.map_error (fun ((err, tr), _) -> ((err :> error), tr))
+    |> Result.map_error (fun ((err, tr), _) -> ((err :> Minterp.error), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
   let postcond_call_trace () =
@@ -35,19 +33,21 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let++ _ =
     Consumer.run ~subst:lsubst
       (Cn_assert.consume_return_type return_type ret csubst state)
-    |> Result.map_error (fun err -> ((err :> error), postcond_call_trace ()))
+    |> Result.map_error (fun err ->
+        ((err :> Minterp.error), postcond_call_trace ()))
   in
   ()
 
 (* Render a single [error] (either a soteria-c memory error or a logical
    consumption failure coming from the symex engine). *)
-let pp_error ft : error -> unit = function
+let pp_error ft : Minterp.error -> unit = function
   | #Error.t as e -> Error.pp ft e
   | #Csymex.cons_fail as e -> Csymex.pp_cons_fail ft e
+  | `Missing_resource -> Fmt.pf ft "Missing resource (under-specified)"
 
-let severity_of_error : error -> Diagnostic.severity = function
+let severity_of_error : Minterp.error -> Diagnostic.severity = function
   | #Error.t as e -> Error.severity e
-  | #Csymex.cons_fail -> Diagnostic.Error
+  | #Csymex.cons_fail | `Missing_resource -> Diagnostic.Error
 
 let print_diagnostic ~fid ~call_trace ~error =
   let msg = Fmt.str "%a in %s" pp_error error fid in

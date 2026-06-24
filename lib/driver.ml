@@ -127,18 +127,17 @@ let exec_main (config : Soteria.Config.t) c_config fuel file =
   in
   let has_errors = ref false in
   List.iter
-    (let open Soteria_c_lib.Error.Diagnostic in
-     function
-     | Compo_res.Ok (v, _), _ ->
-         Fmt.pr "Successfully finished with %a@\n" Core_value.pp v
-     | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), st)), _ ->
-         has_errors := true;
-         print_diagnostic ~fid:"main" ~call_trace ~error:err
-     | Error (Gave_up msg), _ ->
-         has_errors := true;
-         print_diagnostic ~fid:"main"
-           ~call_trace:Soteria.Terminal.Call_trace.empty ~error:(`Gave_up msg)
-     | Missing _, _ -> Fmt.failwith "Can't miss at the moment")
+    (function
+      | Compo_res.Ok (v, _), _ ->
+          Fmt.pr "Successfully finished with %a@\n" Core_value.pp v
+      | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), st)), _ ->
+          has_errors := true;
+          Verify.print_diagnostic ~fid:"main" ~call_trace ~error:err
+      | Error (Gave_up msg), _ ->
+          has_errors := true;
+          Verify.print_diagnostic ~fid:"main"
+            ~call_trace:Soteria.Terminal.Call_trace.empty ~error:(`Gave_up msg)
+      | Missing _, _ -> Fmt.failwith "Can't miss at the moment")
     results;
   if !has_errors then Error "Didn't finish"
   else (

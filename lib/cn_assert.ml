@@ -42,6 +42,11 @@ let nondet_bt (bt : Cn.BaseTypes.t) : Core_value.t Csymex.t =
   | Bits (sign, size_bits) ->
       let+ v = Csymex.nondet (Typed.t_int size_bits) in
       Core_value.(Obj (Int v))
+  | Loc _ ->
+      let* loc = Csymex.nondet Typed.t_loc in
+      let+ ofs = Csymex.nondet Typed.t_usize in
+      let ptr = Typed.Ptr.mk loc ofs in
+      Core_value.(Obj (Ptr ptr))
   | _ -> Fmt.kstr not_impl "nondet_bt: %a" Mu.pp_bt bt
 
 let produce_computational_arg (subst, state)
