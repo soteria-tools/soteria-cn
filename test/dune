@@ -1,2 +1,8 @@
 (cram
  (deps ../bin/main.exe))
+
+(env
+ (_
+  (env-vars
+   (HIDE_UNSTABLE 1)
+   (TERM dumb))))

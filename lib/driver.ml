@@ -97,7 +97,7 @@ let show_mucore config c_config file =
   Ok ()
 
 (* Compositionally verify CN function specifications. *)
-let verify_main (config : Soteria.Config.t) c_config fuel file =
+let verify (config : Soteria.Config.t) c_config fuel file =
   let open Syntaxes.Result in
   let* file = Option.to_result ~none:"No input file provided" file in
   let fuel = Soteria.Symex.Fuel_gauge.Cli.validate_or_exit fuel in

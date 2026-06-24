@@ -40,3 +40,30 @@ let from_args (args : Mu.arguments) (params : Core_value.t list) : t =
       | Computational (sym, _) -> add sym param acc
       | Ghost _ -> L.failwith "Unsupported ghost arguments")
     empty args.comp params
+
+type term = Cn.(BaseTypes.t Terms.term)
+type annot = Cn.(BaseTypes.t Terms.annot)
+
+exception Not_implemented of annot
+
+let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
+  let (IT (it, _bt, _loc)) = annot in
+  match it with
+  | Sym s -> find s subst
+  | Tuple ts ->
+      let vs = List.map (eval_annot subst) ts in
+      Core_value.Tuple vs
+  | Binop (LE, t1, t2) ->
+      let v1 = eval_annot subst t1 in
+      let v2 = eval_annot subst t2 in
+      Core_value.leq ~signed:true v1 v2
+  | Binop (And, t1, t2) ->
+      let v1 = eval_annot subst t1 in
+      let v2 = eval_annot subst t2 in
+      Core_value.Bool.and_ v1 v2
+  | _ -> raise (Not_implemented annot)
+
+let eval_annot subst term =
+  try Csymex.return (eval_annot subst term)
+  with Not_implemented annot ->
+    Fmt.kstr Csymex.not_impl "eval_annot %a" Mu.pp_it annot

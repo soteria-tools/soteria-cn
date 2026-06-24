@@ -1,4 +1,6 @@
+module State_here = State
 open Soteria_c_lib
+module State = State_here
 open Soteria.Soteria_std
 open Soteria.Logs.Import
 open Syntaxes.FunctionWrap
@@ -16,10 +18,7 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let open Csymex in
   let open Syntax in
   let@@ () = with_extra_call_trace ~loc ~msg:"Verifying function" in
-  let lsubst = Csymex.Value.Expr.Subst.empty in
-  let* (csubst, state), lsubst =
-    Producer.run ~subst:lsubst (Cn_assert.produce_arguments args)
-  in
+  let* csubst, state = Cn_assert.produce_arguments args in
   let** result, state =
     State.SM.Result.run_with_state ~state
     @@ Minterp.eval_expr ~labels csubst body
@@ -30,13 +29,29 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
     Soteria.Terminal.Call_trace.singleton ~loc:(fst return_type.ret_info)
       ~msg:"Consuming postcondition" ()
   in
-  let++ _ =
-    Consumer.run ~subst:lsubst
-      (Cn_assert.consume_return_type return_type ret csubst state)
+  let** _, st =
+    Cn_assert.consume_return_type return_type ret csubst state
     |> Result.map_error (fun err ->
         ((err :> Minterp.error), postcond_call_trace ()))
   in
-  ()
+  let fn_call_trace elements =
+    elements
+    @ [
+        Soteria.Terminal.Call_trace.mk_element ~loc
+          ~msg:"Memory leftover after this function" ();
+      ]
+  in
+  match State.leaks st with
+  | [] -> Result.ok ()
+  | leaks ->
+      let elems =
+        List.filter_map
+          (Option.map (fun loc ->
+               Soteria.Terminal.Call_trace.mk_element ~loc
+                 ~msg:"Memory allocated here leaked" ()))
+          leaks
+      in
+      Result.error (`Memory_leak, fn_call_trace elems)
 
 (* Render a single [error] (either a soteria-c memory error or a logical
    consumption failure coming from the symex engine). *)

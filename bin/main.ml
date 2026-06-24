@@ -38,7 +38,7 @@ module Verify = struct
 
   let term =
     Term.(
-      const Soteria_cn.Driver.verify_main
+      const Soteria_cn.Driver.verify
       $ Soteria.Config.cmdliner_term ()
       $ Soteria_c_lib.Config.cmdliner_term ()
       $ Soteria.Symex.Fuel_gauge.Cli.term
@@ -77,4 +77,5 @@ let arg = try Sys.argv.(1) with _ -> failwith "No argument provided"
 let cmd =
   Cmd.group (Cmd.info "soteria-cn")
     [ Exec_main.cmd; Verify.cmd; Show_mucore.cmd ]
+
 let () = exit @@ Cmd.eval' cmd
