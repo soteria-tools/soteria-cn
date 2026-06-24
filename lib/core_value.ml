@@ -5,6 +5,7 @@ module Sym = Symbol_std
 module Ctype = Cerb_frontend.Ctype
 module Impl_mem = Cerb_frontend.Impl_mem
 module Svalue = Soteria.Bv_values.Svalue
+module Mu = Usable_mucore
 
 type 'a or_unspec = Spec of 'a | Unspec
 [@@deriving show { with_path = false }]
@@ -30,8 +31,6 @@ type t =
 
 let true_ = Bool Typed.v_true
 let false_ = Bool Typed.v_false
-
-(* ── Conversion from [Usable_mucore] core values ─────────────────────────── *)
 
 (* Width (in bits) of a Cerberus integer type. *)
 let bits_of_ity ity =
@@ -79,8 +78,8 @@ let rec obj_of_mem mv : obj or_unspec =
     (fun _tag _id _mv -> L.failwith "Core_value: union mem value")
 
 (* [OVinteger] carries no type, so its width defaults to [int]. *)
-let rec obj_of_mu (ov : Usable_mucore.object_value) : obj =
-  let open Usable_mucore in
+let rec obj_of_mu (ov : Mu.object_value) : obj =
+  let open Mu in
   match ov with
   | OVinteger iv -> Int (int_of_ival ~bits:Typed.c_int_bits iv)
   | OVfloating fv -> Float (float_of_fval fv)
@@ -91,14 +90,14 @@ let rec obj_of_mu (ov : Usable_mucore.object_value) : obj =
   | OVpointer ptr -> ptr_of_ptr_value ptr
   | OVunion _ -> L.failwith "obj_of_mu: union values are not supported"
 
-and loaded_of_mu (lv : Usable_mucore.loaded_value) : obj or_unspec =
-  let open Usable_mucore in
+and loaded_of_mu (lv : Mu.loaded_value) : obj or_unspec =
+  let open Mu in
   match lv with
   | LVspecified ov -> Spec (obj_of_mu ov)
   | LVunspecified _ -> Unspec
 
-let rec of_mu (v : Usable_mucore.value) : t =
-  let open Usable_mucore in
+let rec of_mu (v : Mu.value) : t =
+  let open Mu in
   match v with
   | Vobject ov -> Obj (obj_of_mu ov)
   | Vctype ct -> Type ct
@@ -108,6 +107,22 @@ let rec of_mu (v : Usable_mucore.value) : t =
   | Vtuple vs -> Tuple (List.map of_mu vs)
   | Vlist (_, vs) -> List (List.map of_mu vs)
   | Vloaded lv -> Loaded (loaded_of_mu lv)
+
+let nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
+  let open Csymex.Syntax in
+  match bt with
+  | Bool ->
+      let+ b = Csymex.nondet Typed.t_bool in
+      Bool b
+  | Bits (_sign, size_bits) ->
+      let+ v = Csymex.nondet (Typed.t_int size_bits) in
+      Obj (Int v)
+  | Loc _ ->
+      let* loc = Csymex.nondet Typed.t_loc in
+      let+ ofs = Csymex.nondet Typed.t_usize in
+      let ptr = Typed.Ptr.mk loc ofs in
+      Obj (Ptr ptr)
+  | _ -> Fmt.kstr Csymex.not_impl "nondet_bt: %a" Mu.pp_bt bt
 
 (* A scalar [obj] coerces to a [Basic] aggregate value; arrays and structs map
    to their aggregate counterparts. Function values have no runtime
