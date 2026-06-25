@@ -6,6 +6,7 @@ module State = SState
 module Mu = Usable_mucore
 open Csymex
 open Syntax
+open Soteria_c_helpers
 
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)

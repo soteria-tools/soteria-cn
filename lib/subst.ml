@@ -62,6 +62,11 @@ let eval_tconst : Cn.Terms.const -> Core_value.t = function
   | _ -> raise Not_impl_const
 
 let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
+  let of_opt_not_impl = function
+    | None -> raise (Not_implemented annot)
+    | Some x -> x
+  in
+  let open Typed.Infix in
   let (IT (it, _bt, _loc)) = annot in
   match it with
   | Sym s -> find s subst
@@ -79,6 +84,10 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
       | EQ ->
           [%l.trace "Sem_eq? %a == %a" Core_value.pp v1 Core_value.pp v2];
           Bool (Core_value.sem_eq v1 v2)
+      | Add ->
+          let v1 = Core_value.cast_int v1 |> of_opt_not_impl in
+          let v2 = Core_value.cast_int v2 |> of_opt_not_impl in
+          Obj (Int (v1 +!@ v2))
       | _ -> raise (Not_implemented annot))
   | Good (_, _) ->
       (* Are those pointer invariants? I don't think it should be separate from the chunk? *)

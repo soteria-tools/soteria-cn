@@ -36,7 +36,9 @@ module InterpM = struct
 
   let branches b = State.SM.branches b
   let[@inline] error (err : error) : 'a t = lift_symex_res @@ error_with_loc err
-  let not_impl fmt = Fmt.kstr (fun str -> State.SM.lift @@ not_impl str) fmt
+
+  let not_impl fmt =
+    Fmt.kstr (fun str -> State.SM.lift @@ Soteria_c_helpers.not_impl str) fmt
 
   let of_opt_not_impl ~msg = function
     | Some x -> ok x
@@ -216,13 +218,11 @@ let eval_ctor (ctor : CF.Core.ctor) (vs : Core_value.t list) :
         (Fmt.Dump.list Core_value.pp)
         vs
 
-let eval_iop ~(int_ty : CF.Ctype.integerType) (iop : CF.Core.iop)
-    (lhs : Typed.(T.sint t)) (rhs : Typed.(T.sint t)) :
-    Typed.(T.sint t) InterpM.t =
+let eval_iop ~(wrapping : bool) (iop : CF.Core.iop) (lhs : Typed.(T.sint t))
+    (rhs : Typed.(T.sint t)) : Typed.(T.sint t) InterpM.t =
   let open Typed.Infix in
-  let signed = Layout.is_int_ty_signed int_ty in
   let arith_op ~check_signed_ovf ~checked_op ~unchecked_op =
-    if signed then
+    if not wrapping then
       if%sat check_signed_ovf lhs rhs then error `Overflow
       else ok (checked_op lhs rhs)
     else ok (unchecked_op lhs rhs)
@@ -365,12 +365,19 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
       let* v = eval_pexpr subst value in
       let*^ subst = Subst.assign_pattern subst pat v in
       eval_pexpr subst body
-  | PEcatch_exceptional_condition { int_ty; iop; lhs; rhs } ->
+  | PEcatch_exceptional_condition { int_ty = _; iop; lhs; rhs } ->
       let* lhs = eval_pexpr subst lhs in
       let* rhs = eval_pexpr subst rhs in
       let* lhs = CV.cast_int lhs in
       let* rhs = CV.cast_int rhs in
-      let+ res = eval_iop ~int_ty iop lhs rhs in
+      let+ res = eval_iop ~wrapping:false iop lhs rhs in
+      Core_value.Obj (Core_value.Int res)
+  | PEwrapI { int_ty = _; iop; lhs; rhs } ->
+      let* lhs = eval_pexpr subst lhs in
+      let* rhs = eval_pexpr subst rhs in
+      let* lhs = CV.cast_int lhs in
+      let* rhs = CV.cast_int rhs in
+      let+ res = eval_iop ~wrapping:true iop lhs rhs in
       Core_value.Obj (Core_value.Int res)
   | PEnot e ->
       let+ b = eval_pexpr subst e in
@@ -415,7 +422,6 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
   | PEconstrained _ -> not_impl "PEconstrainted"
   | PEerror _ -> not_impl "PEerror"
   | PEarray_shift _ -> not_impl "PEarray_shift"
-  | PEwrapI _ -> not_impl "PEwrapI"
   | PEstruct _ -> not_impl "PEstruct"
   | PEunion _ -> not_impl "PEunion"
   | PEmemberof _ -> not_impl "PEmemberof"

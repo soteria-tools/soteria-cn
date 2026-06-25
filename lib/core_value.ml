@@ -122,7 +122,7 @@ let nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
       let+ ofs = Csymex.nondet Typed.t_usize in
       let ptr = Typed.Ptr.mk loc ofs in
       Obj (Ptr ptr)
-  | _ -> Fmt.kstr Csymex.not_impl "nondet_bt: %a" Mu.pp_bt bt
+  | _ -> Fmt.kstr Soteria_c_helpers.not_impl "nondet_bt: %a" Mu.pp_bt bt
 
 (* A scalar [obj] coerces to a [Basic] aggregate value; arrays and structs map
    to their aggregate counterparts. Function values have no runtime
