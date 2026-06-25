@@ -317,10 +317,10 @@ and eval_call ~loc (sym : Sym.t) (args : Core_value.t list) :
           Core_value.(Obj (Int i))
       | Loaded Unspec -> ok (Core_value.Loaded Unspec)
       | _ -> L.failwith "Invalid input to conv_int %a" Core_value.pp i)
-  | Symbol (_, _, SD_Id "params_length"), [ Tuple l ] ->
+  | Symbol (_, _, SD_Id "params_length"), [ List l ] ->
       ok @@ Core_value.c_int (List.length l)
   | ( Symbol (_, _, SD_Id "params_nth"),
-      [ Tuple l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
+      [ List l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
       let*^ i =
         Typed.BitVec.to_z i
         |> Csymex.of_opt_not_impl
@@ -426,6 +426,9 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
   [%l.trace "@[<v 2>Evaluating expr:@ %a@]" Mu.pp_expr body];
   let@ () = with_loc ~loc:body.loc in
   [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
+  let* st = get_state () in
+  [%l.trace
+    "@[<v 4>Current state:@ %a@]" (Fmt.Dump.option Soteria_c_lib.State.pp) st];
   let*^ () = Csymex.consume_fuel_steps 1 in
   (* let* () =
     if List.is_empty body.annots then return ()
@@ -478,6 +481,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
       let* args = map_list ~f:(eval_pexpr subst) args in
       let+ res = eval_memop memop args in
       ExprM.Normal res
+  | Eskip -> ExprM.ok Core_value.Unit
   | _ -> not_impl "Unsupported expr: %a" Mu.pp_expr body
 
 and exec_fun (fn : Mu.fun_map_decl) params =

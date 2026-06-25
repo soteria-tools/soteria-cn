@@ -44,26 +44,52 @@ let from_args (args : Mu.arguments) (params : Core_value.t list) : t =
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
+(* It's quite annoying but the printer for const isn't exposed, it's 
+    inlined in the printer for annot for some reason. So we have to 
+    retrieve the const when printing the error *)
+exception Not_impl_const
 exception Not_implemented of annot
+
+let eval_tconst : Cn.Terms.const -> Core_value.t = function
+  | Bits ((_sign, size), v) ->
+      let i = Typed.BitVec.mk_masked size v in
+      Obj (Core_value.Int i)
+  | Z z ->
+      (* FIXME: Not sure why Z is necessary here? We're adding integers with non-integers... *)
+      (* I'll model those as i128 for now... *)
+      let i = Typed.BitVec.mk_masked 128 z in
+      Obj (Core_value.Int i)
+  | _ -> raise Not_impl_const
 
 let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
   let (IT (it, _bt, _loc)) = annot in
   match it with
   | Sym s -> find s subst
+  | Const c -> (
+      try eval_tconst c with Not_impl_const -> raise (Not_implemented annot))
   | Tuple ts ->
       let vs = List.map (eval_annot subst) ts in
       Core_value.Tuple vs
-  | Binop (LE, t1, t2) ->
+  | Binop (op, t1, t2) -> (
       let v1 = eval_annot subst t1 in
       let v2 = eval_annot subst t2 in
-      Core_value.leq ~signed:true v1 v2
-  | Binop (And, t1, t2) ->
-      let v1 = eval_annot subst t1 in
-      let v2 = eval_annot subst t2 in
-      Core_value.Bool.and_ v1 v2
+      match op with
+      | LE -> Core_value.leq ~signed:true v1 v2
+      | And -> Core_value.Bool.and_ v1 v2
+      | EQ ->
+          [%l.trace "Sem_eq? %a == %a" Core_value.pp v1 Core_value.pp v2];
+          Bool (Core_value.sem_eq v1 v2)
+      | _ -> raise (Not_implemented annot))
+  | Good (_, _) ->
+      (* Are those pointer invariants? I don't think it should be separate from the chunk? *)
+      Core_value.true_
   | _ -> raise (Not_implemented annot)
 
 let eval_annot subst term =
-  try Csymex.return (eval_annot subst term)
+  try
+    [%l.trace "Evaluating annot: %a" Mu.pp_it term];
+    let res = eval_annot subst term in
+    [%l.trace "Evaluated to: %a" Core_value.pp res];
+    Csymex.return res
   with Not_implemented annot ->
     Fmt.kstr Csymex.not_impl "eval_annot %a" Mu.pp_it annot

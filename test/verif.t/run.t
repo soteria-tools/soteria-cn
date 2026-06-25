@@ -59,3 +59,7 @@
     6 | | |  
       | \-|  ' 1: Verifying function
       |   \--^ Memory leftover after this function
+
+  $ soteria-cn verify read.c
+  Verifying function read...
+  Successfully verified read

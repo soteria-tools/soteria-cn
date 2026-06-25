@@ -101,7 +101,7 @@ let verify (config : Soteria.Config.t) c_config fuel file =
   let open Syntaxes.Result in
   let* file = Option.to_result ~none:"No input file provided" file in
   let fuel = Soteria.Symex.Fuel_gauge.Cli.validate_or_exit fuel in
-  let@ () = initialise ~soteria_config:config Whole_program c_config in
+  let@ () = initialise ~soteria_config:config Compositional c_config in
   let mucore_file = Frontend.load_mucore_ast file in
   let umucore = Usable_mucore.of_mucore mucore_file in
   let@ () = Ctx.run_with_prog umucore in

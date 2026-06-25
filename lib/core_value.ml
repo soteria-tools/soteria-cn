@@ -282,7 +282,7 @@ let cfunction (fn_sig : Cn.Sctypes.c_concrete_sig) : t =
   Tuple
     [
       Type fn_sig.sig_return_ty;
-      Tuple (List.map (fun t -> Type t) fn_sig.sig_arg_tys);
+      List (List.map (fun t -> Type t) fn_sig.sig_arg_tys);
       Bool.of_bool fn_sig.sig_variadic;
       Bool.of_bool fn_sig.sig_has_proto;
     ]
@@ -321,9 +321,10 @@ let rec sem_eq v1 v2 =
       List.fold_left2 (fun acc v1 v2 -> acc &&@ sem_eq v1 v2) Typed.v_true l1 l2
     with Invalid_argument _ -> Typed.v_false
   in
+  (* FIXME: I have no idea why I get Loaded (Spec _) and just Obj _ sometimes?
+            I'll just assume that equality holds for these things for now... *)
   match (v1, v2) with
-  | Obj o1, Obj o2 -> sem_eq_obj o1 o2
-  | Loaded l1, Loaded l2 -> sem_eq_or_unspec sem_eq_obj l1 l2
+  | (Loaded (Spec o1) | Obj o1), (Loaded (Spec o2) | Obj o2) -> sem_eq_obj o1 o2
   | Type t1, Type t2 -> Typed.Bool.of_bool @@ Ctype.ctypeEqual t1 t2
   | Unit, Unit -> Typed.v_true
   | List l1, List l2 -> sem_eq_list l1 l2

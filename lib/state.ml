@@ -8,7 +8,19 @@ module Mu = Usable_mucore
 open Mu
 include State
 
-let produce_core_value (_ptr : Typed.(T.sptr t)) = ()
+let consume_owned ptr ty st =
+  let open Csymex.Syntax in
+  let ty = Sctypes.to_ctype ty in
+  let++ v, state =
+    SM.Result.run_with_state ~state:st (consume_aggregate' ptr ty)
+  in
+  (Core_value.of_agv ~ty v, state)
+
+let produce_owned (ptr : Typed.(T.sptr t)) (ty : Sctypes.t) (v : Core_value.t)
+    (t : t option) : t option Csymex.t =
+  let ty = Sctypes.to_ctype ty in
+  let agv = Core_value.to_agv v in
+  produce_aggregate' ptr ty agv t
 
 let leaks (state : t option) : Cerb_location.t option list =
   let result =
