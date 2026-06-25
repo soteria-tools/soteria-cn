@@ -63,3 +63,21 @@
   $ soteria-cn verify read.c
   Verifying function read...
   Successfully verified read
+
+  $ soteria-cn verify basic_incr.c
+  Verifying function incr_unsigned...
+  Successfully verified incr_unsigned
+  Verifying function incr_signed_no_ovf...
+  Successfully verified incr_signed_no_ovf
+  Verifying function incr_signed_ovf...
+  error: Integer overflow in incr_signed_ovf
+      --> basic_incr.c:32:11
+   24 |    
+   25 | /  void incr_signed_ovf (int *p)
+   26 | |  /*@ requires take P = RW<int>(p);
+      . |  
+   32 | |    int m = n + 1;
+      | |            ^^^^^ Triggering operation
+   33 | |    *p = m;
+   34 | |  
+      | \--' 1: Verifying function
