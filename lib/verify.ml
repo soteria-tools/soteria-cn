@@ -86,7 +86,7 @@ let verify_fn ~fuel:_ ~loc (_name : Sym.t) args return_type labels body =
     "@[<v 2>Specifically within:@ ret: %a@ logic: %a@]" Mu.pp_bt
       (snd return_type.ret) Mu.pp_logical_return return_type.logic];
   let process = verif_process ~loc args return_type labels body in
-  Csymex.Result.run ~mode:OX ~stats:Caller process
+  Csymex.Result.run ~fail_fast:true ~mode:OX ~stats:Caller process
 
 (* Verify every checked function of [prog], skipping the ones the user marked as
    trusted as well as the bare declarations (which have no body to check), and
