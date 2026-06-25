@@ -10,7 +10,7 @@
       | | /--------------^
    22 | | |              && return <= y
    23 | | |              && z <= return; // This doesn't hold
-      | | \---------------------------^ Could not prove this hold
+      | | \---------------------------^ Could not prove this holds
    24 | |    @*/
       . |    
    34 | |        }
@@ -90,4 +90,21 @@
       | |            ^^^^^ Triggering operation
    33 | |    *p = m;
    34 | |  
+      | \--' 1: Verifying function
+
+  $ soteria-cn verify five_six.c
+  Verifying function five_six...
+  Successfully verified five_six
+  Verifying function five_six_wrong...
+  error: `Lfail (false) in five_six_wrong
+      --> five_six.c:19:14
+   13 |    
+   14 | /  unsigned int five_six_wrong(unsigned int *p, unsigned int *q) 
+   15 | |  /*@ requires take P = RW<unsigned int>(p);
+      . |  
+   19 | |               return == 6u32;
+      | |               ^^^^^^^^^^^^^^ Could not prove this holds
+      . |  
+   24 | |      return *p;
+   25 | |  
       | \--' 1: Verifying function

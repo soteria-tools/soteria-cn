@@ -21,7 +21,7 @@ let logic_assert v =
   let err =
     ( err,
       Soteria.Terminal.Call_trace.singleton ~loc
-        ~msg:"Could not prove this hold" () )
+        ~msg:"Could not prove this holds" () )
   in
   Result.error err
 
