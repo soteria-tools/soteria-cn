@@ -138,3 +138,9 @@
    40 | |    p->x = temp_y;
    41 | |  
       | \--' 1: Verifying function
+
+  $ soteria-cn verify init_point.c
+  Verifying function zero...
+  Successfully verified zero
+  Verifying function init_point...
+  Successfully verified init_point

@@ -163,10 +163,6 @@ open Syntax
 let error_of_ub (_ub : CF.Undefined.undefined_behaviour) : error =
   `UBPointerArithmetic
 
-let stop_if_unsupported (args : arguments) (trusted : trusted) =
-  if List.is_empty args.logic && trusted = Checked then ok ()
-  else not_impl "exec_fn: function is either trusted or has logic arguments."
-
 let eval_impl_call (i : CF.Implementation.implementation_constant)
     (args : Core_value.t list) : Core_value.t InterpM.t =
   match (i, args) with _ -> not_impl "unsupported impl call"
@@ -497,9 +493,8 @@ and exec_fun (fn : Mu.fun_map_decl) params =
 
   match fn with
   | ProcDecl _ -> not_impl "exec_fn: ProcDecl"
-  | Proc { loc; args; body; labels; return_type = _; trusted } -> (
+  | Proc { loc; args; body; labels; return_type = _; trusted = _ } -> (
       let@ () = with_loc ~loc in
-      let* () = stop_if_unsupported args trusted in
       let subst = Subst.from_args args params in
       let+ v = eval_expr ~labels subst body in
       [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
