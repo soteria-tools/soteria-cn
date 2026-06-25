@@ -1,4 +1,4 @@
-// Extracted from the CN tutorial.
+// Extracted from the CN tutorial — see THIRD_PARTY for license.
 
 void incr_unsigned (unsigned int *p)
 /*@ requires take P = RW<unsigned int>(p);

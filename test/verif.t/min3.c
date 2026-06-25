@@ -1,4 +1,4 @@
-// Extracted from the CN tutorial.
+// Extracted from the CN tutorial — see THIRD_PARTY for license.
 
 unsigned int min3(unsigned int x, unsigned int y, unsigned int z)
 /*@ ensures return <= x
