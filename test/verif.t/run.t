@@ -17,21 +17,6 @@
    35 | |    }
       | \----' 1: Verifying function
    36 |      
-  error: `Lfail (((V|2| <=s V|1|) && (V|3| <=s V|2|))) in min3_invalid_spec
-      --> min3.c:21:13
-   19 |      
-   20 | /    unsigned int min3_invalid_spec(unsigned int x, unsigned int y, unsigned int z)
-   21 | |    /*@ ensures return <= x
-      | | /--------------^
-   22 | | |              && return <= y
-   23 | | |              && z <= return; // This doesn't hold
-      | | \---------------------------^ Could not prove this hold
-   24 | |    @*/
-      . |    
-   34 | |        }
-   35 | |    }
-      | \----' 1: Verifying function
-   36 |      
   error: Null pointer dereference in min3_invalid_code
       --> min3.c:47:16
    36 |    
@@ -63,6 +48,31 @@
   $ soteria-cn verify read.c
   Verifying function read...
   Successfully verified read
+  Verifying function read_leak...
+  warning: Memory leak in read_leak
+      --> read.c:13:1
+   12 |      
+   13 |      unsigned int read_leak(unsigned int *p)
+      | /----'
+      | | /--^
+   14 | | |  /*@
+      . | |  
+   18 | | |    return *p;
+   19 | | |  }
+      | \-|  ' 1: Verifying function
+      |   \--^ Memory leftover after this function
+   20 |      
+  error: Null pointer dereference in read_invalid
+      --> read.c:24:10
+   20 |    
+   21 | /  unsigned int read_invalid(unsigned int *p)
+   22 | |  /* no spec */
+   23 | |  {
+   24 | |    return *p;
+      | |           ^^ Invalid memory load
+   25 | |  }
+      | \--' 1: Verifying function
+   26 |    
 
   $ soteria-cn verify basic_incr.c
   Verifying function incr_unsigned...
