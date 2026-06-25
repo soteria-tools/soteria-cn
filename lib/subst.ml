@@ -89,6 +89,10 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
           let v2 = Core_value.cast_int v2 |> of_opt_not_impl in
           Obj (Int (v1 +!@ v2))
       | _ -> raise (Not_implemented annot))
+  | StructMember (t, memb) ->
+      let v = eval_annot subst t in
+      let v = Core_value.struct_field v memb |> of_opt_not_impl in
+      Loaded v
   | Good (_, _) ->
       (* Are those pointer invariants? I don't think it should be separate from the chunk? *)
       Core_value.true_

@@ -18,15 +18,23 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let open Csymex in
   let open Syntax in
   let@@ () = with_extra_call_trace ~loc ~msg:"Verifying function" in
-  let* csubst, state = Cn_assert.produce_arguments args in
+  [%l.debug "Producing pre-condition"];
+  let* subst, state = Cn_assert.produce_arguments args in
+  [%l.debug
+    "@[<v 2>About to execute function body with:@ @[<v 2>subst: %a@]@ @[<v \
+     2>state: %a@]@]"
+    Subst.pp subst
+      (Fmt.Dump.option @@ Soteria_c_lib.State.pp_pretty ~ignore_freed:true)
+      state];
+  Csymex.log_solver_state ~level:Trace ();
   let** result, state =
     State.SM.Result.run_with_state ~state
-    @@ Minterp.eval_expr ~labels csubst body
+    @@ Minterp.eval_expr ~labels subst body
     |> Result.map_error (fun ((err, tr), _) -> ((err :> Minterp.error), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
   let** _, st =
-    Cn_assert.consume_return_type return_type ret csubst state
+    Cn_assert.consume_return_type return_type ret subst state
     |> Result.map_error (fun (err, tr) -> ((err :> Minterp.error), tr))
   in
   let fn_call_trace elements =
@@ -39,6 +47,10 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   match State.leaks st with
   | [] -> Result.ok ()
   | leaks ->
+      [%l.debug
+        "@[<v 2>Memory leak in state:@ %a@]"
+          (Fmt.Dump.option @@ Soteria_c_lib.State.pp)
+          st];
       let elems =
         List.filter_map
           (Option.map (fun loc ->

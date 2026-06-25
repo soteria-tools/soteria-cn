@@ -33,15 +33,15 @@
 
   $ soteria-cn verify leak.c -v
   warning: Memory leak in to_verify
-      --> leak.c:3:1
-    2 |      
-    3 |      int to_verify() {
+      --> leak.c:5:1
+    4 |      
+    5 |      int to_verify() {
       | /----'
       | | /--^
-    4 | | |    int *p = malloc(sizeof(int));
+    6 | | |    int *p = malloc(sizeof(int));
       | | |             ------------------- 2: Memory allocated here leaked
-    5 | | |    return 0;
-    6 | | |  
+    7 | | |    return 0;
+    8 | | |  
       | \-|  ' 1: Verifying function
       |   \--^ Memory leftover after this function
 
@@ -97,14 +97,44 @@
   Successfully verified five_six
   Verifying function five_six_wrong...
   error: `Lfail (false) in five_six_wrong
-      --> five_six.c:19:14
-   13 |    
-   14 | /  unsigned int five_six_wrong(unsigned int *p, unsigned int *q) 
-   15 | |  /*@ requires take P = RW<unsigned int>(p);
+      --> five_six.c:21:14
+   15 |    
+   16 | /  unsigned int five_six_wrong(unsigned int *p, unsigned int *q) 
+   17 | |  /*@ requires take P = RW<unsigned int>(p);
       . |  
-   19 | |               return == 6u32;
+   21 | |               return == 6u32;
       | |               ^^^^^^^^^^^^^^ Could not prove this holds
       . |  
-   24 | |      return *p;
-   25 | |  
+   26 | |      return *p;
+   27 | |  
+      | \--' 1: Verifying function
+
+  $ soteria-cn verify transpose.c
+  Verifying function transpose...
+  Successfully verified transpose
+  Verifying function transpose_wrong...
+  error: `Lfail ((V|3| == V|4|)) in transpose_wrong
+      --> transpose.c:21:13
+   17 |    
+   18 | /  void transpose_wrong (struct point *p) 
+   19 | |  /*@ requires take P = RW<struct point>(p);
+   20 | |      ensures take P_post = RW<struct point>(p);
+   21 | |              P_post.x == P.x;
+      | |              ^^^^^^^^^^^^^^^ Could not prove this holds
+      . |  
+   28 | |    p->y = temp_x;
+   29 | |  }
+      | \--' 1: Verifying function
+   30 |    
+  error: `Lfail ((V|3| == V|4|)) in transpose_wrong2
+      --> transpose.c:34:13
+   30 |    
+   31 | /  void transpose_wrong2 (struct point *p) 
+   32 | |  /*@ requires take P = RW<struct point>(p);
+   33 | |      ensures take P_post = RW<struct point>(p);
+   34 | |              P_post.x == P.x;
+      | |              ^^^^^^^^^^^^^^^ Could not prove this holds
+      . |  
+   40 | |    p->x = temp_y;
+   41 | |  
       | \--' 1: Verifying function

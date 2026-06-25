@@ -1,5 +1,6 @@
 open Soteria_c_lib
 open Soteria.Logs.Import
+open Soteria.Soteria_std
 open Typed
 module Sym = Symbol_std
 module Ctype = Cerb_frontend.Ctype
@@ -108,7 +109,7 @@ let rec of_mu (v : Mu.value) : t =
   | Vlist (_, vs) -> List (List.map of_mu vs)
   | Vloaded lv -> Loaded (loaded_of_mu lv)
 
-let nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
+let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
   let open Csymex.Syntax in
   match bt with
   | Bool ->
@@ -122,7 +123,59 @@ let nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
       let+ ofs = Csymex.nondet Typed.t_usize in
       let ptr = Typed.Ptr.mk loc ofs in
       Obj (Ptr ptr)
+  | Struct sym ->
+      let prog = Ctx.get_prog () in
+      let layout =
+        match Symbol_std.Map.find sym prog.tag_defs with
+        | StructDef layout -> layout
+        | _ ->
+            L.failwith "nondet_bt: expected struct definition for %a" Sym.pp sym
+      in
+      let+ values =
+        Csymex.map_list
+          ~f:(fun { member_or_padding; _ } ->
+            match member_or_padding with
+            | None -> Csymex.return None
+            | Some (_id, ty) -> (
+                let bt = Cn.Memory.bt_of_sct ty in
+                let+ v = nondet_bt bt in
+                match v with
+                | Loaded x -> Some x
+                | Obj x -> Some (Spec x)
+                | _ -> L.failwith "nondet_bt: expected loaded or obj value"))
+          layout
+      in
+      let values = List.filter_map Fun.id values in
+      Loaded (Spec (Struct { tag = sym; members = values }))
   | _ -> Fmt.kstr Soteria_c_helpers.not_impl "nondet_bt: %a" Mu.pp_bt bt
+
+let struct_field (v : t) (memb : Cerb_frontend.Symbol.identifier) :
+    obj or_unspec option =
+  let open Syntaxes.Option in
+  let* tag, members =
+    match v with
+    | Obj (Struct { tag; members }) | Loaded (Spec (Struct { tag; members })) ->
+        Some (tag, members)
+    | _ -> None
+  in
+  let tag_def = Symbol_std.Map.find tag (Ctx.get_prog ()).tag_defs in
+  let struct_def =
+    match tag_def with
+    | StructDef layout -> layout
+    | _ -> L.failwith "struct_field: not a struct"
+  in
+  let rec find struct_def members =
+    match (struct_def, members) with
+    | [], [] -> None
+    | Cn.Memory.{ member_or_padding = None; _ } :: rest_def, members ->
+        find rest_def members
+    | { member_or_padding = Some (id, _); _ } :: _, member :: _
+      when Cerb_frontend.Symbol.idEqual memb id ->
+        Some member
+    | _ :: rest_def, _ :: rest_members -> find rest_def rest_members
+    | _ -> L.failwith "Invalid structure definition for %a" Sym.pp tag
+  in
+  find struct_def members
 
 (* A scalar [obj] coerces to a [Basic] aggregate value; arrays and structs map
    to their aggregate counterparts. Function values have no runtime

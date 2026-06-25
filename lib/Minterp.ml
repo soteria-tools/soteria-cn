@@ -434,7 +434,9 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
   [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
   let* st = get_state () in
   [%l.trace
-    "@[<v 4>Current state:@ %a@]" (Fmt.Dump.option Soteria_c_lib.State.pp) st];
+    "@[<v 4>Current state:@ %a@]"
+      (Fmt.Dump.option @@ Soteria_c_lib.State.pp_pretty ~ignore_freed:true)
+      st];
   let*^ () = Csymex.consume_fuel_steps 1 in
   (* let* () =
     if List.is_empty body.annots then return ()

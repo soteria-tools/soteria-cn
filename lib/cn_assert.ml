@@ -37,9 +37,11 @@ let subst_or_extend ~ty sym subst =
 let produce_computational_arg (subst, state)
     ((arg, _loc) : Mu.computational_arg * Cn.Locations.info) :
     (Subst.t * State.t option) Csymex.t =
+  [%l.trace "Producing computational argument: %a" Mu.pp_computational_arg arg];
   let (Computational (sym, ty) | Ghost (sym, ty)) = arg in
   let+ v = Core_value.nondet_bt ty in
   let subst = Subst.add sym v subst in
+  [%l.trace "New substitution: %a" Subst.pp subst];
   (subst, state)
 
 let produce_pure (subst, state) (annot : annot) :
