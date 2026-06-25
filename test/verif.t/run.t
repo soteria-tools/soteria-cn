@@ -144,3 +144,9 @@
   Successfully verified zero
   Verifying function init_point...
   Successfully verified init_point
+
+  $ soteria-cn verify transpose2.c
+  Verifying function swap...
+  Successfully verified swap
+  Verifying function transpose2...
+  Successfully verified transpose2
