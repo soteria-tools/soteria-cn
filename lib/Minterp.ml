@@ -504,11 +504,11 @@ and exec_fun (fn : Mu.fun_map_decl) params =
       | None -> InterpM.error `No_spec
       | Some (args, ret) ->
           exec_spec ~subst:(Subst.from_args args params) args ret)
-  | Proc { loc; args; body; labels; return_type = _; trusted = _ } -> (
+  | Proc { loc; args; body; labels; return_type; trusted = _ } -> (
       let subst = Subst.from_args args params in
       let@ () = with_loc ~loc in
-      (* if Mu.has_spec args return_type then exec_spec ~subst args return_type
-      else *)
-      let+ v = eval_expr ~labels subst body in
-      [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
-      match v with Normal _ -> Core_value.Unit | Returned v -> v)
+      if Mu.has_spec args return_type then exec_spec ~subst args return_type
+      else
+        let+ v = eval_expr ~labels subst body in
+        [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
+        match v with Normal _ -> Core_value.Unit | Returned v -> v)

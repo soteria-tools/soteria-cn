@@ -118,12 +118,12 @@ let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
       Bool b
   | Bits (_sign, size_bits) ->
       let+ v = Csymex.nondet (Typed.t_int size_bits) in
-      Obj (Int v)
+      Loaded (Spec (Int v))
   | Loc _ ->
       let* loc = Csymex.nondet Typed.t_loc in
       let+ ofs = Csymex.nondet Typed.t_usize in
       let ptr = Typed.Ptr.mk loc ofs in
-      Obj (Ptr ptr)
+      Loaded (Spec (Ptr ptr))
   | Struct sym ->
       let prog = Ctx.get_prog () in
       let layout =
