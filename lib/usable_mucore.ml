@@ -290,6 +290,9 @@ type file = {
 
 (* ──────────────────────────── helpers ──────────────────────────── *)
 
+let has_spec (args : arguments) (ret_ty : return_type) =
+  not (List.is_empty args.logic && List.is_empty ret_ty.logic)
+
 let loc_of_pexpr (pe : pexpr) = pe.loc
 let loc_of_expr (e : expr) = e.loc
 let loc_of_pattern (p : pattern) = p.loc

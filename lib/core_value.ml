@@ -112,6 +112,7 @@ let rec of_mu (v : Mu.value) : t =
 let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
   let open Csymex.Syntax in
   match bt with
+  | Unit -> Csymex.return Unit
   | Bool ->
       let+ b = Csymex.nondet Typed.t_bool in
       Bool b

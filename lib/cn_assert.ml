@@ -11,6 +11,12 @@ open Soteria_c_helpers
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
+let pp_rname = Mu.(pp_pp @@ Request.pp_name ~no_nums:true)
+
+let pp_okind ft = function
+  | Mu.Request.Init -> Fmt.pf ft "Init"
+  | Uninit -> Fmt.pf ft "Uninit"
+
 (* Sound only in OX mode, of course *)
 let logic_assert v =
   let*- err = Csymex.assert_or_error v (`Lfail v :> Cn_error.t) in
@@ -67,8 +73,19 @@ let produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
       let* v = Core_value.nondet_bt ty in
       let+ state = State.produce_owned ptr cty v state in
       (v, (subst, state))
+  | Owned (cty, Uninit), [] ->
+      let* ptr = Subst.eval_annot subst ptr in
+      let* ptr =
+        Core_value.cast_ptr ptr
+        |> of_opt_not_impl ~msg:"produce_p_resource: not a pointer"
+      in
+      let loc = Typed.Ptr.loc ptr in
+      let ofs = Typed.Ptr.ofs ptr in
+      let* len = Layout.size_of_s (Cn.Sctypes.to_ctype cty) in
+      let+ state = State.produce_any' loc ofs len state in
+      (Core_value.Loaded Unspec, (subst, state))
   | Owned _, _ :: _ -> not_impl "produce_p_resource: Owned with iargs"
-  | _ -> not_impl "produce_p_resource: not Owned(Init)"
+  | _ -> Fmt.kstr not_impl "Unsupported resource kind: %a" pp_rname name
 
 let produce_resource (subst, state) (req : Cn.Request.t) (ty : Cn.BaseTypes.t) :
     (Core_value.t * (Subst.t * State.t option)) Csymex.t =
@@ -133,26 +150,36 @@ let consume_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
   | T it -> consume_pure (subst, state) it
   | Forall _ -> not_impl "consume_logical_constraint: Forall"
 
+let consume_owned_pred cty (kind : Mu.Request.init) ptr subst state =
+  let* ptr = Subst.eval_annot subst ptr in
+  let* ptr =
+    Core_value.cast_ptr ptr
+    |> of_opt_not_impl ~msg:"consume_p_resource: not a pointer"
+  in
+  [%l.trace
+    "@[Consuming Owned %a at %a@.@[with state:@ %a@]@]" pp_okind kind Typed.ppa
+      ptr
+      (Fmt.Dump.option @@ State.pp_pretty ~ignore_freed:true)
+      state];
+  let++ v, state =
+    match kind with
+    | Init -> State.consume_owned ptr cty state
+    | Uninit -> State.consume_any ptr cty state
+  in
+  (v, (subst, state))
+
 let consume_p_resrouce (subst, state) (name : Mu.Request.name) ptr iargs :
     (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
   let* loc = Csymex.get_loc () in
   match (name, iargs) with
-  | Owned (cty, Init), [] ->
-      let* ptr = Subst.eval_annot subst ptr in
-      let* ptr =
-        Core_value.cast_ptr ptr
-        |> of_opt_not_impl ~msg:"consume_p_resource: not a pointer"
-      in
-      let++ v, state =
-        State.consume_owned ptr cty state
-        |> Result.map_error (fun (e, _st) ->
-            let trace =
-              Soteria.Terminal.Call_trace.singleton ~loc
-                ~msg:"Could not consume resource" ()
-            in
-            (e, trace))
-      in
-      (v, (subst, state))
+  | Owned (cty, kind), [] ->
+      consume_owned_pred cty kind ptr subst state
+      |> Result.map_error (fun (e, _st) ->
+          let trace =
+            Soteria.Terminal.Call_trace.singleton ~loc
+              ~msg:"Could not consume resource" ()
+          in
+          (e, trace))
   | Owned _, _ :: _ -> not_impl "consume_p_resource: Owned with iargs"
   | _ -> not_impl "consume_p_resource: not Owned(Init)"
 
