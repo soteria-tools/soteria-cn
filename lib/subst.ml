@@ -9,6 +9,13 @@ include Symbol_std.Map
 
 type nonrec t = Core_value.t t
 
+module Builtin_names = struct
+  open Cn.Builtins
+
+  let name_of (_, s, _) = s
+  let ptr_eq = name_of ptr_eq_def
+end
+
 let pp ft t =
   Fmt.iter_bindings ~sep:Fmt.cut iter
     (fun ft (k, v) -> Fmt.pf ft "%a -> %a" Symbol_std.pp k Core_value.pp v)
@@ -63,10 +70,8 @@ let eval_tconst : Cn.Terms.const -> Core_value.t = function
   | _ -> raise Not_impl_const
 
 let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
-  let of_opt_not_impl = function
-    | None -> raise (Not_implemented annot)
-    | Some x -> x
-  in
+  let not_impl () = raise (Not_implemented annot) in
+  let of_opt_not_impl = function None -> not_impl () | Some x -> x in
   let open Typed.Infix in
   let (IT (it, _bt, _loc)) = annot in
   match it with
@@ -75,7 +80,7 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
       try eval_tconst c
       with Not_impl_const ->
         [%l.debug "Unsupported const!"];
-        raise (Not_implemented annot))
+        not_impl ())
   | Tuple ts ->
       let vs = List.map (eval_annot subst) ts in
       Core_value.Tuple vs
@@ -92,11 +97,17 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
           let v1 = Core_value.cast_int v1 |> of_opt_not_impl in
           let v2 = Core_value.cast_int v2 |> of_opt_not_impl in
           Obj (Int (v1 +!@ v2))
-      | _ -> raise (Not_implemented annot))
+      | _ ->
+          [%l.trace "Not impl binop?"];
+          not_impl ())
   | StructMember (t, memb) ->
       let v = eval_annot subst t in
       let v = Core_value.struct_field v memb |> of_opt_not_impl in
       Loaded v
+  | Apply (s, [ p1; p2 ]) when Sym.equal s Builtin_names.ptr_eq ->
+      let p1 = eval_annot subst p1 in
+      let p2 = eval_annot subst p2 in
+      Bool (Core_value.sem_eq p1 p2)
   | Good (_, _) ->
       (* Are those pointer invariants? I don't think it should be separate from the chunk? *)
       Core_value.true_
