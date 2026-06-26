@@ -8,4 +8,4 @@
   cerberus-lib.backend_common)
  (flags :standard -w +27)
  (preprocess
-  (pps soteria.ppx ppx_deriving.std)))
+  (pps soteria.ppx ppx_deriving.std ppx_mixins)))

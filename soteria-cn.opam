@@ -17,6 +17,7 @@ depends: [
   "soteria-c"
   "cerberus-lib"
   "fmt"
+  "ppx_mixins" {= "0.2.0"}
   "ocaml"
   "odoc" {with-doc}
 ]

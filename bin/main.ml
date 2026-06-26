@@ -36,6 +36,15 @@ end
 module Verify = struct
   let file_arg = Arg.(value & pos 0 (some file) None & info ~docv:"FILE" [])
 
+  let functions_arg =
+    let doc =
+      "Restrict verification to the function named $(docv). May be given \
+       several times to verify a list of functions. If omitted, every \
+       (non-trusted) function is verified."
+    in
+    Arg.(
+      value & opt_all string [] & info [ "f"; "function" ] ~docv:"FUNCTION" ~doc)
+
   let term =
     Term.(
       const Soteria_cn.Driver.verify
@@ -43,7 +52,7 @@ module Verify = struct
       $ Soteria_c_lib.Config.cmdliner_term ()
       $ Soteria.Symex.Fuel_gauge.Cli.term
           ~default:Soteria.Symex.Fuel_gauge.infinite ()
-      $ file_arg)
+      $ functions_arg $ file_arg)
 
   let cmd =
     Cmd.v

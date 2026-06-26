@@ -24,7 +24,7 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
     "@[<v 2>About to execute function body with:@ @[<v 2>subst: %a@]@ @[<v \
      2>state: %a@]@]"
     Subst.pp subst
-      (Fmt.Dump.option @@ Soteria_c_lib.State.pp_pretty ~ignore_freed:true)
+      (Fmt.Dump.option @@ State.pp_pretty ~ignore_freed:true)
       state];
   Csymex.log_solver_state ~level:Trace ();
   let** result, state =
@@ -48,9 +48,7 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   | [] -> Result.ok ()
   | leaks ->
       [%l.debug
-        "@[<v 2>Memory leak in state:@ %a@]"
-          (Fmt.Dump.option @@ Soteria_c_lib.State.pp)
-          st];
+        "@[<v 2>Memory leak in state:@ %a@]" (Fmt.Dump.option @@ State.pp) st];
       let elems =
         List.filter_map
           (Option.map (fun loc ->
@@ -102,28 +100,59 @@ let verify_fn ~fuel:_ ~loc (_name : Sym.t) args return_type labels body =
   let process = verif_process ~loc args return_type labels body in
   Csymex.Result.run ~fail_fast:true ~mode:OX ~stats:Caller process
 
+let name_of Cerb_frontend.Symbol.(Symbol (_, _, sd)) =
+  match sd with SD_Id name -> name | _ -> ""
+
+let non_existing_functions (prog : Mu.file) (names : string list) : string list
+    =
+  Sym.Map.fold
+    (fun name _ (acc : string list) ->
+      List.filter (fun n -> name_of name <> n) acc)
+    prog.funs names
+
+let warn_non_existing prog fns =
+  match fns with
+  | None -> ()
+  | Some names ->
+      let non_existing = non_existing_functions prog names in
+      List.iter
+        (fun name ->
+          [%l.warn
+            "Function %s specified in the command line does not exist" name])
+        non_existing
+
 (* Verify every checked function of [prog], skipping the ones the user marked as
    trusted as well as the bare declarations (which have no body to check), and
-   printing a diagnostic for each branch outcome. *)
-let verify_prog ~fuel (prog : Mu.file) : (unit, string) Result.t =
+   printing a diagnostic for each branch outcome. When [only] is non-empty, only
+   the functions whose (human-readable) name appears in it are verified; a
+   warning is emitted for any requested name that does not exist in [prog]. *)
+let verify_prog ~fuel ?only (prog : Mu.file) : (unit, string) Result.t =
   let@ () = Soteria.Stats.As_ctx.with_dumped () in
+  warn_non_existing prog only;
+  let selected =
+    match only with
+    | None -> fun _ -> true
+    | Some only -> fun n -> List.mem n only
+  in
   Sym.Map.iter
     (fun name decl ->
-      match decl with
-      | Proc { trusted = Checked; args; return_type; body; labels; loc } ->
-          Fmt.pr "Verifying function %a...\n" Sym.pp_sym_hum name;
-          let name_str = Fmt.str "%a" Sym.pp_sym_hum name in
-          let has_bugs = ref false in
-          verify_fn ~fuel ~loc name args return_type labels body
-          |> List.iter (fun (r, _pc) ->
-              print_errors ~entry_point:name_str r;
-              if not (Compo_res.is_ok r) then has_bugs := true);
-          if not !has_bugs then
-            Fmt.pr "%a\n" Soteria.Logs.Printers.pp_ok
-              (Fmt.str "Successfully verified %a" Sym.pp_sym_hum name)
-      | Proc { trusted = Trusted loc; _ } ->
-          L.info (fun m ->
-              m "Skipping trusted function %a (%a)" Sym.pp name pp_loc loc)
-      | ProcDecl _ -> ())
+      if not (selected (name_of name)) then ()
+      else
+        match decl with
+        | Proc { trusted = Checked; args; return_type; body; labels; loc } ->
+            Fmt.pr "Verifying function %a...\n" Sym.pp_sym_hum name;
+            let name_str = name_of name in
+            let has_bugs = ref false in
+            verify_fn ~fuel ~loc name args return_type labels body
+            |> List.iter (fun (r, _pc) ->
+                print_errors ~entry_point:name_str r;
+                if not (Compo_res.is_ok r) then has_bugs := true);
+            if not !has_bugs then
+              Fmt.pr "%a\n" Soteria.Logs.Printers.pp_ok
+                (Fmt.str "Successfully verified %a" Sym.pp_sym_hum name)
+        | Proc { trusted = Trusted loc; _ } ->
+            L.info (fun m ->
+                m "Skipping trusted function %a (%a)" Sym.pp name pp_loc loc)
+        | ProcDecl _ -> ())
     prog.funs;
   Ok ()

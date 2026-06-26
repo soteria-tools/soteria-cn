@@ -100,6 +100,13 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
       | _ ->
           [%l.trace "Not impl binop?"];
           not_impl ())
+  | Unop (op, t') -> (
+      let v = eval_annot subst t' in
+      match op with
+      | Not -> Core_value.Bool.not v
+      | _ ->
+          [%l.trace "Not impl unop?"];
+          not_impl ())
   | StructMember (t, memb) ->
       let v = eval_annot subst t in
       let v = Core_value.struct_field v memb |> of_opt_not_impl in

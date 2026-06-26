@@ -395,3 +395,18 @@ module Syntax = struct
     let nonzero i = Obj (Int (CInt.Sym_int_syntax.mk_nonzero i))
   end
 end
+
+module Syn = struct
+  (* We don't care about Syn stuff. Soteria shouldn't require this by default
+  anymore.*)
+
+  type syn = | [@@deriving show { with_path = false }]
+
+  let to_syn (_ : t) : syn = L.failwith "Core_value.to_syn: not implemented"
+  let fresh _ : t Csymex.t = L.failwith "Core_value.fresh: not implemented"
+  let subst _ _ = L.failwith "Core_value.subst: not implemented"
+  let learn_eq _ _ = L.failwith "Core_value.learn_eq: not implemented"
+  let exprs_syn _ = L.failwith "Core_value.exprs_syn: not implemented"
+end
+
+include Syn

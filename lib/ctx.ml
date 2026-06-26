@@ -1,9 +1,12 @@
 open Soteria_c_lib
 open Soteria.Logs.Import
 
-type _ Effect.t += Get_prog : Usable_mucore.file Effect.t
+type _ Effect.t +=
+  | Get_prog : Usable_mucore.file Effect.t
+  | Get_pred_def : Symbol_std.t -> Cn.Definition.Predicate.t Effect.t
 
 let get_prog () = Effect.perform Get_prog
+let get_pred_def name = Effect.perform (Get_pred_def name)
 
 let cn_to_ctype_def (def : Usable_mucore.tag_definition) :
     Soteria_c_lib.Layout.Tag_defs.def =
@@ -35,20 +38,29 @@ let cn_to_ctype_def (def : Usable_mucore.tag_definition) :
   in
   (loc, tag_def)
 
+(** TODO: optimise hash function for Symbol_std. *)
+
 let add_umu_defs (umu : Usable_mucore.file) tbl : unit =
   let open Soteria_c_lib.Layout.Tag_defs in
   Symbol_std.Map.fold
     (fun id def _ -> Hashtbl.add tbl id (cn_to_ctype_def def))
     umu.tag_defs ()
 
+let add_pred_defs (umu : Usable_mucore.file) tbl : unit =
+  let open Cn.Definition.Predicate in
+  List.iter (fun (sym, def) -> Hashtbl.add tbl sym def) umu.resource_predicates
+
 let run_with_prog (prog : Usable_mucore.file) f =
   let open Effect.Deep in
   let open Layout.Tag_defs in
   let tag_defs = Hashtbl.create 1020 in
   let layouts = Hashtbl.create 1020 in
+  let pred_defs = Hashtbl.create 64 in
+  add_pred_defs prog pred_defs;
   add_umu_defs prog tag_defs;
   try f () with
   | effect Get_prog, k -> Effect.Deep.continue k prog
+  | effect Get_pred_def name, k -> continue k (Hashtbl.find pred_defs name)
   | effect Find_tag id, k -> continue k (Hashtbl.find_opt tag_defs id)
   | effect Find_layout_cache ty, k -> continue k (Hashtbl.find_opt layouts ty)
   | effect Add_layout_cache (ty, l), k ->

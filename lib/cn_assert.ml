@@ -84,8 +84,14 @@ let produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
       let* len = Layout.size_of_s (Cn.Sctypes.to_ctype cty) in
       let+ state = State.produce_any' loc ofs len state in
       (Core_value.Loaded Unspec, (subst, state))
+  | PName sym, iargs ->
+      let def = Ctx.get_pred_def sym in
+      let ret_ty = snd def.oarg in
+      let* v = Core_value.nondet_bt ret_ty in
+      let* iargs = map_list ~f:(Subst.eval_annot subst) iargs in
+      let+ state = State.produce_pred sym iargs [ v ] state in
+      (v, (subst, state))
   | Owned _, _ :: _ -> not_impl "produce_p_resource: Owned with iargs"
-  | _ -> Fmt.kstr not_impl "Unsupported resource kind: %a" pp_rname name
 
 let produce_resource (subst, state) (req : Cn.Request.t) (ty : Cn.BaseTypes.t) :
     (Core_value.t * (Subst.t * State.t option)) Csymex.t =
@@ -163,8 +169,10 @@ let consume_owned_pred cty (kind : Mu.Request.init) ptr subst state =
       state];
   let++ v, state =
     match kind with
-    | Init -> State.consume_owned ptr cty state
-    | Uninit -> State.consume_any ptr cty state
+    | Init ->
+        State.SM.Result.run_with_state ~state (State.consume_owned ptr cty)
+    | Uninit ->
+        State.SM.Result.run_with_state ~state (State.consume_any ptr cty)
   in
   (v, (subst, state))
 

@@ -1,4 +1,6 @@
+module SState = State
 open Soteria_c_lib
+module State = SState
 open Soteria.Soteria_std
 open Soteria.Logs.Import
 open Syntaxes.FunctionWrap
@@ -435,7 +437,7 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
   let* st = get_state () in
   [%l.trace
     "@[<v 4>Current state:@ %a@]"
-      (Fmt.Dump.option @@ Soteria_c_lib.State.pp_pretty ~ignore_freed:true)
+      (Fmt.Dump.option @@ SState.pp_pretty ~ignore_freed:true)
       st];
   let*^ () = Csymex.consume_fuel_steps 1 in
   (* let* () =
@@ -503,8 +505,10 @@ and exec_fun (fn : Mu.fun_map_decl) params =
       | Some (args, ret) ->
           exec_spec ~subst:(Subst.from_args args params) args ret)
   | Proc { loc; args; body; labels; return_type = _; trusted = _ } -> (
-      let@ () = with_loc ~loc in
       let subst = Subst.from_args args params in
+      let@ () = with_loc ~loc in
+      (* if Mu.has_spec args return_type then exec_spec ~subst args return_type
+      else *)
       let+ v = eval_expr ~labels subst body in
       [%l.debug "Function returned: %a" (ExprM.pp_exec_r Core_value.pp) v];
       match v with Normal _ -> Core_value.Unit | Returned v -> v)

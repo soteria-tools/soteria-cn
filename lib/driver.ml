@@ -96,18 +96,21 @@ let show_mucore config c_config file =
   Fmt.pr "%a@." Usable_mucore.pp_file umucore;
   Ok ()
 
-(* Compositionally verify CN function specifications. *)
-let verify (config : Soteria.Config.t) c_config fuel file =
+(* Compositionally verify CN function specifications. [functions] optionally
+   restricts verification to the named functions; an empty list verifies all. *)
+let verify (config : Soteria.Config.t) c_config fuel functions file =
   let open Syntaxes.Result in
+  let functions = match functions with [] -> None | l -> Some l in
   let* file = Option.to_result ~none:"No input file provided" file in
   let fuel = Soteria.Symex.Fuel_gauge.Cli.validate_or_exit fuel in
   let@ () = initialise ~soteria_config:config Compositional c_config in
   let mucore_file = Frontend.load_mucore_ast file in
   let umucore = Usable_mucore.of_mucore mucore_file in
   let@ () = Ctx.run_with_prog umucore in
-  Verify.verify_prog ~fuel umucore
+  Verify.verify_prog ~fuel ?only:functions umucore
 
 let exec_main (config : Soteria.Config.t) c_config fuel file =
+  let module SState = State in
   let open Soteria_c_lib in
   let open Syntaxes.Result in
   let* file = Option.to_result ~none:"No input file provided" file in
@@ -121,7 +124,7 @@ let exec_main (config : Soteria.Config.t) c_config fuel file =
     let@ () = Ctx.run_with_prog umucore in
     let computation = Minterp.exec_fun main [] in
     let computation =
-      State.SM.Result.run_with_state ~state:State.empty computation
+      SState.SM.Result.run_with_state ~state:SState.empty computation
     in
     Csymex.Result.run ~stats:(Dump ()) ~fuel ~mode:OX computation
   in
