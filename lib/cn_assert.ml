@@ -89,6 +89,7 @@ let produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
       let ret_ty = snd def.oarg in
       let* v = Core_value.nondet_bt ret_ty in
       let* iargs = map_list ~f:(Subst.eval_annot subst) iargs in
+      (* Cn predicates have a unique out-param. *)
       let+ state = State.produce_pred sym iargs [ v ] state in
       (v, (subst, state))
   | Owned _, _ :: _ -> not_impl "produce_p_resource: Owned with iargs"
@@ -179,17 +180,38 @@ let consume_owned_pred cty (kind : Mu.Request.init) ptr subst state =
 let consume_p_resrouce (subst, state) (name : Mu.Request.name) ptr iargs :
     (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
   let* loc = Csymex.get_loc () in
+  let mk_trace msg = Soteria.Terminal.Call_trace.singleton ~loc ~msg () in
+  let lift_error x =
+    Csymex.map
+      (function
+        | Compo_res.Ok x -> Compo_res.Ok x
+        | Error (e, _st) ->
+            let trace = mk_trace "Could not consume resource" in
+            Error (e, trace)
+        | Missing _ ->
+            let trace =
+              mk_trace "Missing resource (could be hidden under a predicate?)"
+            in
+            Error (`Missing_resource, trace))
+      x
+  in
   match (name, iargs) with
   | Owned (cty, kind), [] ->
-      consume_owned_pred cty kind ptr subst state
-      |> Result.map_error (fun (e, _st) ->
-          let trace =
-            Soteria.Terminal.Call_trace.singleton ~loc
-              ~msg:"Could not consume resource" ()
-          in
-          (e, trace))
+      consume_owned_pred cty kind ptr subst state |> lift_error
+  | PName sym, iargs -> (
+      let* (iargs : Core_value.t list) =
+        map_list ~f:(Subst.eval_annot subst) iargs
+      in
+      let++ os, state =
+        SState.SM.Result.run_with_state ~state (State.consume_pred sym iargs)
+        |> lift_error
+      in
+      (* CN predicates have a unique post value. *)
+      match os with
+      | [ o ] -> (o, (subst, state))
+      | _ ->
+          L.failwith "consume_p_resource: Predicate returned multiple outputs")
   | Owned _, _ :: _ -> not_impl "consume_p_resource: Owned with iargs"
-  | _ -> not_impl "consume_p_resource: not Owned(Init)"
 
 let consume_resource (subst, state) (req : Cn.Request.t) :
     (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =

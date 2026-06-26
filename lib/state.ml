@@ -64,12 +64,6 @@ let lift_produce (f : SState.t option -> SState.t option Csymex.t) :
     let+ base = f base in
     PState.to_opt { preds; base }
 
-let produce_pred name ins outs state =
-  let open Csymex.Syntax in
-  let { preds; base } = PState.of_opt state in
-  let+ preds = PState.Uninterpreted.produce' name ins outs preds in
-  PState.to_opt { preds; base }
-
 let pp_pretty ~ignore_freed ft { base; preds } =
   Fmt.pf ft "@[<v 2>State:@ %a@]@.@[<v 2>Predicates:@ %a@]"
     (Fmt.Dump.option @@ SState.pp_pretty ~ignore_freed)

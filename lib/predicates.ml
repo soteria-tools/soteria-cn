@@ -8,6 +8,8 @@ open Sym_states
 (** Defining this here out of convenience but it will be move to the
     Soteria.Sym_states library. *)
 
+type 'v unfold_heuristics = 'v list -> 'v list -> int option
+
 module type Name = [%mixins Sigs.Printable + Map.OrderedType]
 
 module M (Symex : Symex.Base) = struct
@@ -36,6 +38,18 @@ module M (Symex : Symex.Base) = struct
 
     let ins_outs (_, ins, outs) =
       (List.concat_map V.exprs_syn ins, List.concat_map V.exprs_syn outs)
+
+    (* let index_with_max_heurisitcs (heuristics : V.t unfold_heuristics)
+        (st : t option) : (Name.t * V.t list) option =
+      of_opt st
+      |> List.fold_left
+           (fun acc (name, ins, _) ->
+             match (acc, heuristics ins) with
+             | None, Some j -> Some (name, ins, j)
+             | Some (_, _, j), Some j' when j < j' -> Some (name, ins, j')
+             | _ -> acc)
+           None
+      |> Option.map (fun (name, ins, _) -> (name, ins)) *)
 
     let rec sure_list_eq (l1 : V.t list) (l2 : V.t list) : bool Symex.t =
       let open Symex.Syntax in
@@ -103,6 +117,27 @@ module M (Symex : Symex.Base) = struct
 
     type t = { base : B.t option; preds : Uninterpreted.t option }
     [@@deriving sym_state { symex = Symex }]
+
+    (* let with_base ?(retry : V.t unfold_heuristics option) f =
+      let open Symex in
+      let open Symex.Syntax in
+      fun (state : SM.st) ->
+        let { preds; base } = of_opt state in
+        let* v, base = f base in
+        match v with
+        | Compo_res.Ok v -> Symex.return (Compo_res.Ok v, to_opt { preds; base })
+        | (Compo_res.Missing _ | Error _) as v -> (
+            match retry with
+            | None -> Symex.return (v, state)
+            | Some heuristics -> L.failwith "Don't have heuristics yet") *)
+
+    let produce_pred name ins outs state =
+      let open Symex.Syntax in
+      let { preds; base } = of_opt state in
+      let+ preds = Uninterpreted.produce' name ins outs preds in
+      to_opt { preds; base }
+
+    let consume_pred name ins = with_preds (Uninterpreted.consume' name ins)
 
     open SM
     open SM.Syntax

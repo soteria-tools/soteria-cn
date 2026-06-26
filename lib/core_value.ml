@@ -124,6 +124,11 @@ let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
       let+ ofs = Csymex.nondet Typed.t_usize in
       let ptr = Typed.Ptr.mk loc ofs in
       Loaded (Spec (Ptr ptr))
+  | Record fields ->
+      let+ members =
+        Csymex.map_list ~f:(fun (_id, bt) -> nondet_bt bt) fields
+      in
+      Tuple members
   | Struct sym ->
       let prog = Ctx.get_prog () in
       let layout =

@@ -164,6 +164,55 @@ and action_ =
       mo : linux_memory_order;
     }
 
+(* ─────────────── CN proof statements ([Cnprog] / [Cnstatement]) ───────────────
+
+   A [Cnstatement.statement Cnprog.t] is the *compiled* form of the surface CN
+   proof commands (pack/unpack, unfold, assert, …). Two things have already
+   happened in CN's frontend: every surface [cn_expr] has been lowered to an
+   [IndexTerms.t] — i.e. the very [annot]/[Term]s that {!Subst}/{!Cn_assert}
+   already handle — and every memory dereference inside those expressions has
+   been hoisted out into a preamble of [Let] bindings. So there is nothing here
+   that needs separate [cn_expr] handling; we only re-own the statement
+   structure, keeping CN's [Request]/[LogicalConstraints]/[IndexTerms] leaves
+   as-is and flattening the [Let] spine into an ordered list. *)
+
+type cn_load = {
+  loc : Locations.t;  (** location of the binding *)
+  sym : Sym.t;  (** name bound to the loaded value *)
+  ct : Sctypes.t;  (** type read through the pointer *)
+  pointer : IndexTerms.t;  (** the pointer being dereferenced *)
+}
+(** One hoisted memory load [let sym = *(pointer : ct)], lifted out of a CN
+    expression because reading memory is a stateful operation. The flattening of
+    [Cnprog.Let]. *)
+
+type predicate_or_predicate_name =
+  | Predicate of Request.Predicate.t
+  | PredicateName of Request.name
+
+type cn_statement =
+  | Pack_unpack of CF.Cn.pack_unpack * predicate_or_predicate_name
+  | To_from_bytes of CF.Cn.to_from * Request.Predicate.t
+  | Have of LogicalConstraints.t
+  | Instantiate of (Sym.t, Sctypes.t) CF.Cn.cn_to_instantiate * IndexTerms.t
+  | Split_case of LogicalConstraints.t
+  | Extract of Id.t list * (Sym.t, Sctypes.t) CF.Cn.cn_to_extract * IndexTerms.t
+  | Unfold of Sym.t * IndexTerms.t list
+  | Apply of Sym.t * IndexTerms.t list
+  | Assert of LogicalConstraints.t
+  | Inline of Sym.t list
+  | Print of IndexTerms.t
+(** A single CN proof command. Mirrors [Cnstatement.statement]; all its
+    expressions are already [IndexTerms.t] ([annot]). *)
+
+type cn_prog = {
+  loads : cn_load list;  (** memory loads to perform, in order, before [stmt] *)
+  loc : Locations.t;  (** location of the proof command *)
+  stmt : cn_statement;  (** the proof command itself *)
+}
+(** The flattened [Cnstatement.statement Cnprog.t]: its [Let] spine of hoisted
+    loads followed by the terminal [Pure] statement. *)
+
 type expr = expr_ located
 
 and expr_ =
@@ -186,9 +235,10 @@ and expr_ =
   | Ebound of expr
   | End of expr list
   | Erun of Sym.t * pexpr list
-  | CN_progs of
-      (Sym.t, CF.Ctype.ctype) CF.Cn.cn_statement list
-      * Cnstatement.statement Cnprog.t list
+  | CN_progs of cn_prog list
+      (** Compiled CN proof commands; see {!cn_prog}. The surface
+          [cn_statement list] is dropped — it is the pre-compilation form of the
+          same statements and carries no extra information. *)
 
 (* Argument binders: a flat record of the two binder lists. The body is paired
    with [arguments] at each use site (see {!fun_map_decl} and {!label_def}). *)
@@ -409,7 +459,6 @@ let pp_name ft : Sym.t CF.Core.generic_name -> unit = function
 
 (* doc_tree-only leaves are rendered through their [dtree]. *)
 let pp_dtree dtree = pp_pp (fun x -> CF.Pp_ast.pp_doc_tree (dtree x))
-let pp_cnstatement_prog = pp_dtree (Cnprog.dtree Cnstatement.dtree)
 let comma = Fmt.comma
 
 (* A delimited, comma-separated sequence with a leading soft break. When the
@@ -590,6 +639,65 @@ let pp_action ft (a : action) =
   let prefix = match a.polarity with Pos -> "" | Neg -> "neg " in
   Fmt.pf ft "%s%a" prefix pp_action_ a.action
 
+let pp_pack_unpack ft = function
+  | CF.Cn.Pack -> Fmt.string ft "pack"
+  | CF.Cn.Unpack -> Fmt.string ft "unpack"
+
+let pp_to_from ft = function
+  | CF.Cn.To -> Fmt.string ft "to_bytes"
+  | CF.Cn.From -> Fmt.string ft "from_bytes"
+
+let pp_to_instantiate ft = function
+  | CF.Cn.I_Function s -> Fmt.pf ft "function %a" pp_sym s
+  | CF.Cn.I_Good ty -> Fmt.pf ft "good(%a)" pp_sct ty
+  | CF.Cn.I_Everything -> Fmt.string ft "everything"
+
+let pp_to_extract ft = function
+  | CF.Cn.E_Everything -> Fmt.string ft "everything"
+  | CF.Cn.E_Pred _ -> Fmt.string ft "pred"
+
+let pp_pred ft (p : Request.Predicate.t) =
+  Fmt.pf ft "@[<2>%a%a@]"
+    (pp_pp (Request.pp_name ~no_nums:true))
+    p.name (pp_paren pp_it) (p.pointer :: p.iargs)
+
+let pp_pred_or_name ft = function
+  | Predicate p -> pp_pred ft p
+  | PredicateName n -> pp_pp (Request.pp_name ~no_nums:true) ft n
+
+let pp_cn_statement ft = function
+  | Pack_unpack (pu, p) ->
+      Fmt.pf ft "@[<2>%a %a@]" pp_pack_unpack pu pp_pred_or_name p
+  | To_from_bytes (tf, p) -> Fmt.pf ft "@[<2>%a %a@]" pp_to_from tf pp_pred p
+  | Have lc -> Fmt.pf ft "@[<2>have %a@]" pp_lc lc
+  | Instantiate (i, it) ->
+      Fmt.pf ft "@[<2>instantiate %a,@ %a@]" pp_to_instantiate i pp_it it
+  | Split_case lc -> Fmt.pf ft "@[<2>split_case %a@]" pp_lc lc
+  | Extract (attrs, e, it) ->
+      Fmt.pf ft "@[<2>extract [%a] %a,@ %a@]"
+        (Fmt.list ~sep:comma pp_id)
+        attrs pp_to_extract e pp_it it
+  | Unfold (s, args) ->
+      Fmt.pf ft "@[<2>unfold %a%a@]" pp_sym s (pp_paren pp_it) args
+  | Apply (s, args) ->
+      Fmt.pf ft "@[<2>apply %a%a@]" pp_sym s (pp_paren pp_it) args
+  | Assert lc -> Fmt.pf ft "@[<2>assert %a@]" pp_lc lc
+  | Inline nms -> Fmt.pf ft "@[<2>inline %a@]" (Fmt.list ~sep:comma pp_sym) nms
+  | Print it -> Fmt.pf ft "@[<2>print %a@]" pp_it it
+
+let pp_cn_load ft (l : cn_load) =
+  Fmt.pf ft "@[<2>let %a =@ load(%a : %a)@]" pp_sym l.sym pp_it l.pointer pp_sct
+    l.ct
+
+let pp_cn_prog ft (p : cn_prog) =
+  match p.loads with
+  | [] -> pp_cn_statement ft p.stmt
+  | loads ->
+      let pp_load ft l = Fmt.pf ft "%a in" pp_cn_load l in
+      Fmt.pf ft "@[<v>%a@,%a@]"
+        (Fmt.list ~sep:Fmt.cut pp_load)
+        loads pp_cn_statement p.stmt
+
 let rec pp_expr ft (e : expr) =
   match e.node with
   | Epure pe -> Fmt.pf ft "@[<2>pure(@,%a)@]" pp_pexpr pe
@@ -611,8 +719,8 @@ let rec pp_expr ft (e : expr) =
   | End es -> Fmt.pf ft "@[<2>nd%a@]" (pp_paren pp_expr) es
   | Erun (s, pes) ->
       Fmt.pf ft "@[<2>run %a%a@]" pp_sym s (pp_paren pp_pexpr) pes
-  | CN_progs (_, progs) ->
-      Fmt.pf ft "@[<2>cn_progs%a@]" (pp_bracket pp_cnstatement_prog) progs
+  | CN_progs progs ->
+      Fmt.pf ft "@[<2>cn_progs%a@]" (pp_bracket pp_cn_prog) progs
 
 (* Flatten a chain of sequenced bindings ([Elet]/[Ewseq]/[Esseq]) into a flat
    list of statements plus the final tail. Bindings nested in a bound value are
@@ -874,6 +982,39 @@ module Of_mucore = struct
   let paction (Mu.Paction (polarity, Mu.Action (loc, a_))) : action =
     { loc; polarity; action = action_ a_ }
 
+  let predicate_or_predicate_name :
+      Cnstatement.predicate_or_predicate_name -> predicate_or_predicate_name =
+    function
+    | Cnstatement.Predicate p -> Predicate p
+    | Cnstatement.PredicateName n -> PredicateName n
+
+  let cn_statement : Cnstatement.statement -> cn_statement = function
+    | Cnstatement.Pack_unpack (pu, p) ->
+        Pack_unpack (pu, predicate_or_predicate_name p)
+    | Cnstatement.To_from_bytes (tf, p) -> To_from_bytes (tf, p)
+    | Cnstatement.Have lc -> Have lc
+    | Cnstatement.Instantiate (i, it) -> Instantiate (i, it)
+    | Cnstatement.Split_case lc -> Split_case lc
+    | Cnstatement.Extract (attrs, e, it) -> Extract (attrs, e, it)
+    | Cnstatement.Unfold (s, args) -> Unfold (s, args)
+    | Cnstatement.Apply (s, args) -> Apply (s, args)
+    | Cnstatement.Assert lc -> Assert lc
+    | Cnstatement.Inline nms -> Inline nms
+    | Cnstatement.Print it -> Print it
+
+  (* Flatten the [Let] spine of hoisted loads, then translate the terminal
+     [Pure] statement at the bottom. *)
+  let cn_prog (p : Cnstatement.statement Cnprog.t) : cn_prog =
+    let rec aux acc (p : Cnstatement.statement Cnprog.t) =
+      match p with
+      | Cnprog.Let (loc, (sym, load), rest) ->
+          let ({ ct; pointer } : Cnprog.load) = load in
+          aux ({ loc; sym; ct; pointer } :: acc) rest
+      | Cnprog.Pure (loc, stmt) ->
+          { loads = List.rev acc; loc; stmt = cn_statement stmt }
+    in
+    aux [] p
+
   (* Discarded [pure(unit)] sequencing steps are folded out as each [expr] is
      built, never constructed and then simplified — so these predicates inspect
      the source [Mu] AST directly, before conversion. *)
@@ -945,7 +1086,7 @@ module Of_mucore = struct
     | Mu.Ebound e -> Ebound (expr e)
     | Mu.End es -> End (List.map expr es)
     | Mu.Erun (s, pes) -> Erun (s, List.map pexpr pes)
-    | Mu.CN_progs (stmts, progs) -> CN_progs (stmts, progs)
+    | Mu.CN_progs (_stmts, progs) -> CN_progs (List.map cn_prog progs)
 
   (* Flatten the cons-list argument types into [arguments] + the final body. *)
   let rec arguments_l :
