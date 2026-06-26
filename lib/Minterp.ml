@@ -7,26 +7,17 @@ open Csymex
 module Mu = Usable_mucore
 open Mu
 
-type error = [ Error.t | Csymex.cons_fail | `Missing_resource ]
-type error_with_trace = error * Cerb_location.t Soteria.Terminal.Call_trace.t
-
-let error_with_loc ?(msg = "Triggering operation") (err : error) =
-  let open Syntax in
-  let* loc = get_loc () in
-  let err = (err, Soteria.Terminal.Call_trace.singleton ~loc ~msg ()) in
-  Result.error err
-
 module InterpM = struct
   open State.SM
   include Result
 
-  type 'a t = ('a, error_with_trace, State.syn list) Result.t
+  type 'a t = ('a, Cn_error.with_trace, State.syn list) Result.t
 
   let lift (type a) (m : a Csymex.t) : a t =
     State.SM.lift @@ Csymex.map Compo_res.ok m
 
   let lift_symex_res (type a)
-      (s : (a, error_with_trace, State.syn list) Csymex.Result.t) : a t =
+      (s : (a, Cn_error.with_trace, State.syn list) Csymex.Result.t) : a t =
     State.SM.lift s
 
   let with_extra_call_trace ~loc ~msg : 'a t -> 'a t =
@@ -35,7 +26,9 @@ module InterpM = struct
     (e, elem :: trace)
 
   let branches b = State.SM.branches b
-  let[@inline] error (err : error) : 'a t = lift_symex_res @@ error_with_loc err
+
+  let[@inline] error (err : Cn_error.t) : 'a t =
+    lift_symex_res @@ Cn_error.error_with_loc err
 
   let not_impl fmt =
     Fmt.kstr (fun str -> State.SM.lift @@ Soteria_c_helpers.not_impl str) fmt
@@ -76,7 +69,7 @@ module InterpM = struct
     let with_miss_as_error :
         'a.
         ('a, Error.with_trace, State.syn list) Result.t ->
-        ('a, error_with_trace, State.syn list) Result.t =
+        ('a, Cn_error.with_trace, State.syn list) Result.t =
      fun m ->
       let*^ loc = Csymex.get_loc () in
       let trace =
@@ -89,7 +82,7 @@ module InterpM = struct
       State.SM.map
         (function
           | Compo_res.Ok r -> Compo_res.Ok r
-          | Error (e, tr) -> Error ((e :> error), tr)
+          | Error (e, tr) -> Error ((e :> Cn_error.t), tr)
           | Missing _ -> Error (`Missing_resource, trace))
         m
 
@@ -160,7 +153,7 @@ end
 open InterpM
 open Syntax
 
-let error_of_ub (_ub : CF.Undefined.undefined_behaviour) : error =
+let error_of_ub (_ub : CF.Undefined.undefined_behaviour) : Cn_error.t =
   `UBPointerArithmetic
 
 let eval_impl_call (i : CF.Implementation.implementation_constant)
@@ -213,6 +206,17 @@ let eval_ctor (ctor : CF.Core.ctor) (vs : Core_value.t list) :
       not_impl "Unsupported constructor: %a with args %a" Mu.pp_ctor ctor
         (Fmt.Dump.list Core_value.pp)
         vs
+
+let exec_spec ~subst (arguments : arguments) (return_type : return_type) :
+    Core_value.t InterpM.t =
+  let* state = get_state () in
+  let* subst, state =
+    InterpM.lift_symex_res @@ Cn_assert.consume_arguments arguments subst state
+  in
+  let*^ subst, state = Cn_assert.produce_return_type return_type subst state in
+  let v = Subst.find (fst return_type.ret) subst in
+  let+ () = set_state state in
+  v
 
 let eval_iop ~(wrapping : bool) (iop : CF.Core.iop) (lhs : Typed.(T.sint t))
     (rhs : Typed.(T.sint t)) : Typed.(T.sint t) InterpM.t =
@@ -492,7 +496,12 @@ and exec_fun (fn : Mu.fun_map_decl) params =
   [%l.debug "@[Executing function:@ %a@]" Mu.pp_fun_map_decl fn];
 
   match fn with
-  | ProcDecl _ -> not_impl "exec_fn: ProcDecl"
+  | ProcDecl (loc, spec) -> (
+      let@ () = with_loc ~loc in
+      match spec with
+      | None -> InterpM.error `No_spec
+      | Some (args, ret) ->
+          exec_spec ~subst:(Subst.from_args args params) args ret)
   | Proc { loc; args; body; labels; return_type = _; trusted = _ } -> (
       let@ () = with_loc ~loc in
       let subst = Subst.from_args args params in

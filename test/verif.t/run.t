@@ -56,6 +56,8 @@
       | /----'
       | | /--^
    14 | | |  /*@
+   15 | | |    requires take P = RW<unsigned int>(p);
+      | | |                  - 2: Memory allocated here leaked
       . | |  
    18 | | |    return *p;
    19 | | |  }

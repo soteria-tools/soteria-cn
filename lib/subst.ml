@@ -59,6 +59,7 @@ let eval_tconst : Cn.Terms.const -> Core_value.t = function
       (* I'll model those as i128 for now... *)
       let i = Typed.BitVec.mk_masked 128 z in
       Obj (Core_value.Int i)
+  | Bool b -> Core_value.Bool.of_bool b
   | _ -> raise Not_impl_const
 
 let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
@@ -71,7 +72,10 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
   match it with
   | Sym s -> find s subst
   | Const c -> (
-      try eval_tconst c with Not_impl_const -> raise (Not_implemented annot))
+      try eval_tconst c
+      with Not_impl_const ->
+        [%l.debug "Unsupported const!"];
+        raise (Not_implemented annot))
   | Tuple ts ->
       let vs = List.map (eval_annot subst) ts in
       Core_value.Tuple vs

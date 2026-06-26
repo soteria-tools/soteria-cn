@@ -11,12 +11,9 @@ open Soteria_c_helpers
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
-type cons_fail_with_trace =
-  Csymex.cons_fail * Cerb_location.t Soteria.Terminal.Call_trace.t
-
 (* Sound only in OX mode, of course *)
 let logic_assert v =
-  let*- err = Csymex.assert_or_error v (`Lfail v :> Csymex.cons_fail) in
+  let*- err = Csymex.assert_or_error v (`Lfail v :> Cn_error.t) in
   let* loc = get_loc () in
   let err =
     ( err,
@@ -81,8 +78,9 @@ let produce_resource (subst, state) (req : Cn.Request.t) (ty : Cn.BaseTypes.t) :
   | Q _ -> not_impl "produce_resource: Q"
 
 let produce_logical_arg (subst, state)
-    ((arg, _loc) : Mu.logical_arg * Cn.Locations.info) :
+    ((arg, loc) : Mu.logical_arg * Cn.Locations.info) :
     (Subst.t * State.t option) Csymex.t =
+  let@@ () = Csymex.with_loc ~loc:(fst loc) in
   match arg with
   | Define (sym, annot) ->
       let+ v = Subst.eval_annot subst annot in
@@ -107,6 +105,14 @@ let produce_arguments (args : Mu.arguments) :
   in
   fold_list ~init:(subst, state) ~f:produce_logical_arg args.logic
 
+let produce_return_type (ret_ty : Mu.return_type) subst state =
+  let@@ () = Csymex.with_loc ~loc:(fst ret_ty.ret_info) in
+  [%l.trace "@[Producing post condition:@ %a@]" Mu.pp_return_type ret_ty];
+  let rsym, bty = ret_ty.ret in
+  let* r = Core_value.nondet_bt bty in
+  let subst = Subst.add rsym r subst in
+  fold_list ret_ty.logic ~f:produce_logical_arg ~init:(subst, state)
+
 let consume_pure (subst, state) (annot : annot) =
   let (IT (_, _, loc)) = annot in
   let@@ () = Csymex.with_loc ~loc in
@@ -120,7 +126,7 @@ let consume_pure (subst, state) (annot : annot) =
 
 let consume_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
     ( Subst.t * State.t option,
-      cons_fail_with_trace,
+      Cn_error.with_trace,
       State.syn list )
     Csymex.Result.t =
   match lc with
@@ -160,7 +166,7 @@ let consume_resource (subst, state) (req : Cn.Request.t) :
 let consume_logical_arg (subst, state)
     ((arg, (loc, _)) : Mu.logical_arg * Cn.Locations.info) :
     ( Subst.t * State.t option,
-      cons_fail_with_trace,
+      Cn_error.with_trace,
       State.syn list )
     Csymex.Result.t =
   let@@ () = Csymex.with_loc ~loc in
@@ -175,9 +181,19 @@ let consume_logical_arg (subst, state)
       (subst, state)
   | Constraint lc -> consume_logical_constraint (subst, state) lc
 
+let consume_arguments (args : Mu.arguments) subst state :
+    ( Subst.t * State.t option,
+      Cn_error.with_trace,
+      State.syn list )
+    Csymex.Result.t =
+  let open Csymex.Result in
+  (* I'm assuming the type Cn base type checker already went through code,
+in which case there's nothing else to do about computational args. *)
+  fold_list ~init:(subst, state) ~f:consume_logical_arg args.logic
+
 let consume_return_type (ty : Mu.return_type) (ret : Core_value.t) subst state :
     ( Subst.t * State.t option,
-      cons_fail_with_trace,
+      Cn_error.with_trace,
       State.syn list )
     Csymex.Result.t =
   [%l.trace "Consuming return type: %a" Mu.pp_return_type ty];

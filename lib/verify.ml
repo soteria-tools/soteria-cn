@@ -30,12 +30,12 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
   let** result, state =
     State.SM.Result.run_with_state ~state
     @@ Minterp.eval_expr ~labels subst body
-    |> Result.map_error (fun ((err, tr), _) -> ((err :> Minterp.error), tr))
+    |> Result.map_error (fun ((err, tr), _) -> ((err :> Cn_error.t), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
   let** _, st =
     Cn_assert.consume_return_type return_type ret subst state
-    |> Result.map_error (fun (err, tr) -> ((err :> Minterp.error), tr))
+    |> Result.map_error (fun (err, tr) -> ((err :> Cn_error.t), tr))
   in
   let fn_call_trace elements =
     elements
@@ -62,14 +62,16 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
 
 (* Render a single [error] (either a soteria-c memory error or a logical
    consumption failure coming from the symex engine). *)
-let pp_error ft : Minterp.error -> unit = function
+let pp_error ft : Cn_error.t -> unit = function
   | #Error.t as e -> Error.pp ft e
   | #Csymex.cons_fail as e -> Csymex.pp_cons_fail ft e
   | `Missing_resource -> Fmt.pf ft "Missing resource (under-specified)"
+  | `No_spec -> Fmt.pf ft "Calling a function with no body or specification"
 
-let severity_of_error : Minterp.error -> Diagnostic.severity = function
+let severity_of_error : Cn_error.t -> Diagnostic.severity = function
   | #Error.t as e -> Error.severity e
   | #Csymex.cons_fail | `Missing_resource -> Diagnostic.Error
+  | `No_spec -> Diagnostic.Error
 
 let print_diagnostic ~fid ~call_trace ~error =
   let msg = Fmt.str "%a in %s" pp_error error fid in

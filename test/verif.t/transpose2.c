@@ -1,3 +1,5 @@
+// Extracted from the CN tutorial — see THIRD_PARTY for license.
+
 void swap (unsigned int *p, unsigned int *q)
 /*@ requires take P = RW<unsigned int>(p);
              take Q = RW<unsigned int>(q);

@@ -1,3 +1,5 @@
+// Extracted from the CN tutorial — see THIRD_PARTY for license.
+
 void zero (unsigned int *coord) 
 /*@ requires take Coord = RW<unsigned int>(coord);
     ensures take Coord_post = RW<unsigned int>(coord);
