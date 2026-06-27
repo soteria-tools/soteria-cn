@@ -10,7 +10,6 @@ module Mu = Usable_mucore
 module Id = Cn.Id
 
 type 'a or_unspec = Spec of 'a | Unspec
-[@@deriving show { with_path = false }]
 
 type obj =
   | Int of T.sint Typed.t
@@ -19,22 +18,48 @@ type obj =
   | Array of obj or_unspec list
   | Struct of { tag : Sym.t; members : obj or_unspec list }
   | Fn of Sym.t
-[@@deriving show { with_path = false }]
 
 type t =
   | Obj of obj
   | Loaded of obj or_unspec
-  | Type of (Ctype.ctype[@printer Fmt_ail.pp_ty])
+  | Type of Ctype.ctype
   | Unit
   | List of t list
   | Tuple of t list
   | Record of (Id.t * t) list
-      [@printer
-        Fmt.(
-          brackets @@ list ~sep:semi
-          @@ pair ~sep:(Fmt.any ": ") Fmt_ail.pp_id pp)]
   | Bool of T.sbool Typed.t
-[@@deriving show { with_path = false }]
+
+(* A specified value prints as [Spec(...)] and an unspecified one as [Unspec],
+   so that a [Loaded] value stays distinguishable from a raw [Obj]. *)
+let pp_or_unspec pp_elt ft = function
+  | Spec a -> Fmt.pf ft "Spec(%a)" pp_elt a
+  | Unspec -> Fmt.string ft "Unspec"
+
+let rec pp_obj ft (o : obj) =
+  let pp_members = Fmt.(list ~sep:semi (pp_or_unspec pp_obj)) in
+  match o with
+  | Int i -> Typed.ppa ft i
+  | Float f -> Typed.ppa ft f
+  | Ptr p -> Typed.ppa ft p
+  | Array elems -> Fmt.pf ft "@[<hov 2>[%a]@]" pp_members elems
+  | Struct { tag; members } ->
+      Fmt.pf ft "@[<hov 2>%a {%a}@]" Sym.pp tag pp_members members
+  | Fn sym -> Fmt.pf ft "&%a" Sym.pp sym
+
+let rec pp ft (v : t) =
+  match v with
+  | Obj o -> pp_obj ft o
+  | Loaded l -> pp_or_unspec pp_obj ft l
+  | Type ct -> Fmt_ail.pp_ty ft ct
+  | Unit -> Fmt.string ft "()"
+  | List vs -> Fmt.pf ft "@[<hov 2>[%a]@]" Fmt.(list ~sep:semi pp) vs
+  | Tuple vs -> Fmt.pf ft "@[<hov 1>(%a)@]" Fmt.(list ~sep:comma pp) vs
+  | Record fields ->
+      let pp_field ft (id, v) = Fmt.pf ft "%a: %a" Fmt_ail.pp_id id pp v in
+      Fmt.pf ft "@[<hov 2>{%a}@]" Fmt.(list ~sep:semi pp_field) fields
+  | Bool b -> Typed.ppa ft b
+
+let show = Fmt.to_to_string pp
 
 let true_ = Bool Typed.v_true
 let false_ = Bool Typed.v_false
