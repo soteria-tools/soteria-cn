@@ -58,24 +58,11 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
       in
       Result.error (`Memory_leak, fn_call_trace elems)
 
-(* Render a single [error] (either a soteria-c memory error or a logical
-   consumption failure coming from the symex engine). *)
-let pp_error ft : Cn_error.t -> unit = function
-  | #Error.t as e -> Error.pp ft e
-  | #Csymex.cons_fail as e -> Csymex.pp_cons_fail ft e
-  | `Missing_resource -> Fmt.pf ft "Missing resource (under-specified)"
-  | `No_spec -> Fmt.pf ft "Calling a function with no body or specification"
-
-let severity_of_error : Cn_error.t -> Diagnostic.severity = function
-  | #Error.t as e -> Error.severity e
-  | #Csymex.cons_fail | `Missing_resource -> Diagnostic.Error
-  | `No_spec -> Diagnostic.Error
-
 let print_diagnostic ~fid ~call_trace ~error =
-  let msg = Fmt.str "%a in %s" pp_error error fid in
+  let msg = Fmt.str "%a in %s" Cn_error.pp error fid in
   Soteria.Terminal.Diagnostic.print_diagnostic ~call_trace
     ~as_ranges:Error.Diagnostic.as_ranges ~msg
-    ~severity:(severity_of_error error)
+    ~severity:(Cn_error.severity error)
 
 let print_errors ~entry_point (res : (_, _, _) Compo_res.t) =
   match res with

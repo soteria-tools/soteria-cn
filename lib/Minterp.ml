@@ -216,9 +216,9 @@ and eval_call ~loc (sym : Sym.t) (args : Core_value.t list) :
       ok @@ Core_value.c_int (List.length l)
   | ( Symbol (_, _, SD_Id "params_nth"),
       [ List l; (Obj (Int i) | Loaded (Spec (Int i))) ] ) ->
-      let*^ i =
+      let* i =
         Typed.BitVec.to_z i
-        |> Csymex.of_opt_not_impl
+        |> InterpM.of_opt_not_impl
              ~msg:"params_nth: index is not a concrete integer"
       in
       let i = Z.to_int i in

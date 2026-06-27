@@ -152,6 +152,7 @@
   Successfully verified swap
   Verifying function transpose2...
   Successfully verified transpose2
+
   $ soteria-cn verify get_and_free.c
   Verifying function malloc_and_set...
   Successfully verified malloc_and_set
@@ -167,3 +168,9 @@
   Successfully verified incr2b
   Verifying function call_both...
   Successfully verified call_both
+
+  $ soteria-cn verify simpl_pred.c
+  Verifying function incr2...
+  Successfully verified incr2
+  Verifying function call_both_better...
+  Successfully verified call_both_better

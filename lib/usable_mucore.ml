@@ -202,8 +202,8 @@ type cn_statement =
   | Assert of LogicalConstraints.t
   | Inline of Sym.t list
   | Print of IndexTerms.t
-(** A single CN proof command. Mirrors [Cnstatement.statement]; all its
-    expressions are already [IndexTerms.t] ([annot]). *)
+      (** A single CN proof command. Mirrors [Cnstatement.statement]; all its
+          expressions are already [IndexTerms.t] ([annot]). *)
 
 type cn_prog = {
   loads : cn_load list;  (** memory loads to perform, in order, before [stmt] *)
@@ -323,6 +323,23 @@ type datatype = {
   cases : (Sym.t * (Id.t * BaseTypes.t) list) list;
 }
 
+type clause = {
+  loc : Locations.t;
+  guard : IndexTerms.t;
+  logical_args : logical_arg list;
+  ret : IndexTerms.t;
+}
+
+type predicate_def = {
+  loc : Locations.t;
+  pointer : Sym.t;
+  iargs : (Sym.t * BaseTypes.t) list;
+  oarg : Locations.t * BaseTypes.t;
+  clauses : clause list option;
+  recursive : bool;
+  attrs : Id.t list;
+}
+
 type file = {
   main : Sym.t option;
   tag_defs : tag_definition Sym.Map.t;
@@ -331,7 +348,7 @@ type file = {
   extern : CF.Core.extern_map;
   stdlib_syms : Sym.Set.t;
   mk_functions : function_to_convert list;
-  resource_predicates : (Sym.t * Definition.Predicate.t) list;
+  resource_predicates : (Sym.t * predicate_def) list;
   logical_predicates : (Sym.t * Definition.Function.t) list;
   datatypes : (Sym.t * datatype) list;
   lemmata : (Sym.t * (Locations.t * (arguments * logical_return))) list;
@@ -1106,6 +1123,23 @@ module Of_mucore = struct
         ((Constraint lc, info) :: l, b)
     | Mu.I i -> ([], f i)
 
+  let rec logical_argument_types_l :
+      'i 'j.
+      ('i -> 'j) ->
+      'i LogicalArgumentTypes.t ->
+      (logical_arg * Locations.info) list * 'j =
+   fun f -> function
+    | Define ((s, it), info, rest) ->
+        let l, b = logical_argument_types_l f rest in
+        ((Define (s, it), info) :: l, b)
+    | Resource ((s, rbt), info, rest) ->
+        let l, b = logical_argument_types_l f rest in
+        ((Resource (s, rbt), info) :: l, b)
+    | Constraint (lc, info, rest) ->
+        let l, b = logical_argument_types_l f rest in
+        ((Constraint lc, info) :: l, b)
+    | I i -> ([], f i)
+
   let rec arguments : 'i 'j. ('i -> 'j) -> 'i Mu.arguments -> arguments * 'j =
    fun f -> function
     | Mu.Computational ((s, bt), info, rest) ->
@@ -1216,6 +1250,17 @@ module Of_mucore = struct
       function_to_convert =
     { loc; c_fun_sym; l_fun_sym }
 
+  let clause ({ loc; guard; packing_ft } : Definition.Clause.t) : clause =
+    let logical_args, ret = logical_argument_types_l Fun.id packing_ft in
+    let logical_args = List.map fst logical_args in
+    { loc; guard; logical_args; ret }
+
+  let predicate_def
+      ({ loc; pointer; iargs; oarg; clauses; recursive; attrs } :
+        Definition.Predicate.t) : predicate_def =
+    let clauses = Option.map (List.map clause) clauses in
+    { loc; pointer; iargs; oarg; clauses; recursive; attrs }
+
   let file (f : unit Mu.file) : file =
     {
       main = f.main;
@@ -1225,7 +1270,8 @@ module Of_mucore = struct
       extern = f.extern;
       stdlib_syms = Sym.Set.of_list (Cn.Sym.Set.elements f.stdlib_syms);
       mk_functions = List.map function_to_convert f.mk_functions;
-      resource_predicates = f.resource_predicates;
+      resource_predicates =
+        List.map (fun (s, d) -> (s, predicate_def d)) f.resource_predicates;
       logical_predicates = f.logical_predicates;
       datatypes = List.map (fun (s, d) -> (s, datatype d)) f.datatypes;
       lemmata =

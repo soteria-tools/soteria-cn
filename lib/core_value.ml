@@ -7,6 +7,7 @@ module Ctype = Cerb_frontend.Ctype
 module Impl_mem = Cerb_frontend.Impl_mem
 module Svalue = Soteria.Bv_values.Svalue
 module Mu = Usable_mucore
+module Id = Cn.Id
 
 type 'a or_unspec = Spec of 'a | Unspec
 [@@deriving show { with_path = false }]
@@ -27,6 +28,11 @@ type t =
   | Unit
   | List of t list
   | Tuple of t list
+  | Record of (Id.t * t) list
+      [@printer
+        Fmt.(
+          brackets @@ list ~sep:semi
+          @@ pair ~sep:(Fmt.any ": ") Fmt_ail.pp_id pp)]
   | Bool of T.sbool Typed.t
 [@@deriving show { with_path = false }]
 
@@ -126,9 +132,13 @@ let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
       Loaded (Spec (Ptr ptr))
   | Record fields ->
       let+ members =
-        Csymex.map_list ~f:(fun (_id, bt) -> nondet_bt bt) fields
+        Csymex.map_list
+          ~f:(fun (id, bt) ->
+            let+ v = nondet_bt bt in
+            (id, v))
+          fields
       in
-      Tuple members
+      Record members
   | Struct sym ->
       let prog = Ctx.get_prog () in
       let layout =
@@ -210,7 +220,7 @@ let to_agv (v : t) : Aggregate_val.t =
   match v with
   | Obj o -> obj_to_agv o
   | Loaded o -> loaded_to_agv o
-  | Type _ | Unit | List _ | Tuple _ | Bool _ ->
+  | Type _ | Unit | List _ | Tuple _ | Bool _ | Record _ ->
       L.failwith "Core_value.to_agv: not an aggregate value: %a" pp v
 
 (* The runtime type of a [Basic] aggregate value tells us which scalar [obj] it

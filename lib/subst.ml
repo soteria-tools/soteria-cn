@@ -9,6 +9,8 @@ include Symbol_std.Map
 
 type nonrec t = Core_value.t t
 
+let of_iter iter = Iter.fold (fun acc (k, v) -> add k v acc) empty iter
+
 module Builtin_names = struct
   open Cn.Builtins
 
@@ -111,10 +113,42 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
       let v = eval_annot subst t in
       let v = Core_value.struct_field v memb |> of_opt_not_impl in
       Loaded v
+  | Record members ->
+      let membres =
+        List.map (fun (id, t) -> (id, eval_annot subst t)) members
+      in
+      Core_value.Record membres
+  | RecordMember (record, memb) ->
+      let record =
+        match eval_annot subst record with
+        | Core_value.Record members -> members
+        | _ -> not_impl ()
+      in
+      record
+      |> List.find_map (fun (id, v) ->
+          if Id.equal id memb then Some v else None)
+      |> of_opt_not_impl
   | Apply (s, [ p1; p2 ]) when Sym.equal s Builtin_names.ptr_eq ->
       let p1 = eval_annot subst p1 in
       let p2 = eval_annot subst p2 in
       Bool (Core_value.sem_eq p1 p2)
+  | ITE (g, b1, b2) -> (
+      let g = eval_annot subst g in
+      let b1 = eval_annot subst b1 in
+      let b2 = eval_annot subst b2 in
+      let g = Core_value.cast_bool g |> of_opt_not_impl in
+      (* Ok this is a bit digusting, we'll fix it later, it's a simple fix, but a bit of a refactor *)
+      match b1 with
+      | Loaded (Spec (Int b1)) | Obj (Int b1) ->
+          let b2 = Core_value.cast_int b2 |> of_opt_not_impl in
+          Obj (Int (Typed.ite g b1 b2))
+      | Loaded (Spec (Ptr b1)) | Obj (Ptr b1) ->
+          let b2 = Core_value.cast_ptr b2 |> of_opt_not_impl in
+          Obj (Ptr (Typed.ite g b1 b2))
+      | Bool b1 ->
+          let b2 = Core_value.cast_bool b2 |> of_opt_not_impl in
+          Core_value.Bool (Typed.ite g b1 b2)
+      | _ -> not_impl ())
   | Good (_, _) ->
       (* Are those pointer invariants? I don't think it should be separate from the chunk? *)
       Core_value.true_

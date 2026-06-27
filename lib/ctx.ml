@@ -3,7 +3,7 @@ open Soteria.Logs.Import
 
 type _ Effect.t +=
   | Get_prog : Usable_mucore.file Effect.t
-  | Get_pred_def : Symbol_std.t -> Cn.Definition.Predicate.t Effect.t
+  | Get_pred_def : Symbol_std.t -> Usable_mucore.predicate_def Effect.t
 
 let get_prog () = Effect.perform Get_prog
 let get_pred_def name = Effect.perform (Get_pred_def name)
