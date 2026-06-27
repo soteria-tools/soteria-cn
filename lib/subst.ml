@@ -16,6 +16,7 @@ module Builtin_names = struct
 
   let name_of (_, s, _) = s
   let ptr_eq = name_of ptr_eq_def
+  let is_null = name_of is_null_def
 end
 
 let pp ft t =
@@ -132,6 +133,10 @@ let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
       let p1 = eval_annot subst p1 in
       let p2 = eval_annot subst p2 in
       Bool (Core_value.sem_eq p1 p2)
+  | Apply (s, [ p1 ]) when Sym.equal s Builtin_names.is_null ->
+      let p1 = eval_annot subst p1 in
+      let p1 = Core_value.cast_ptr p1 |> of_opt_not_impl in
+      Bool (Typed.Ptr.is_null p1)
   | ITE (g, b1, b2) -> (
       let g = eval_annot subst g in
       let b1 = eval_annot subst b1 in
