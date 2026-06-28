@@ -11,16 +11,16 @@ open Soteria_c_helpers
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
-let pp_rname = Mu.(pp_pp @@ Request.pp_name ~no_nums:true)
+let pp_rname = Mu.Request.pp_name ~no_nums:true
 
 let pp_okind ft = function
   | Mu.Request.Init -> Fmt.pf ft "Init"
   | Uninit -> Fmt.pf ft "Uninit"
 
-let subst_for_pred_def (def : Mu.predicate_def) ptr iargs =
+let subst_for_pred_def (def : Mu.predicate_def) iargs =
+  (* Both [def.iargs] and [iargs] lead with the pointer, so they line up. *)
   Iter.of_list_combine def.iargs iargs
   |> Iter.map (fun ((sym, _), v) -> (sym, v))
-  |> Iter.cons (def.pointer, ptr)
   |> Subst.of_iter
 
 (* Sound only in OX mode, of course *)
@@ -69,10 +69,7 @@ let rec with_recovery_attempt ~values f =
     ~heuristics:(Unfold_heuristics.heuristics values)
     ~produce_def:(fun name ins outs state ->
       let def = Ctx.get_pred_def name in
-      (* FIXME: we need to cleanup that interface, the CN ptr split is a bit all over the place. *)
-      let* res, state =
-        produce_pred_def ~name state def (List.hd ins) (List.tl ins)
-      in
+      let* res, state = produce_pred_def ~name state def ins in
       let out = List.hd outs in
       let+ () = Csymex.assume [ Core_value.sem_eq res out ] in
       state)
@@ -101,11 +98,11 @@ and produce_clause (subst, state) (clause : Mu.clause) =
   let+ ret = Subst.eval_annot subst clause.ret in
   (ret, (subst, state))
 
-and produce_pred_def ~name state (def : Mu.predicate_def) (ptr : Core_value.t)
+and produce_pred_def ~name state (def : Mu.predicate_def)
     (iargs : Core_value.t list) =
   [%l.trace "Producing the definition of %a" Symbol_std.pp name];
   let@@ () = Csymex.with_loc ~loc:def.loc in
-  let subst = subst_for_pred_def def ptr iargs in
+  let subst = subst_for_pred_def def iargs in
   let* clauses =
     of_opt_not_impl ~msg:"produce_pred_def: no clauses" def.clauses
   in
@@ -115,9 +112,9 @@ and produce_pred_def ~name state (def : Mu.predicate_def) (ptr : Core_value.t)
   in
   (v, state)
 
-and produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
+and produce_p_resource (subst, state) (name : Mu.Request.name) iargs ty =
   match (name, iargs) with
-  | Owned (cty, Init), [] ->
+  | Owned (cty, Init), [ ptr ] ->
       let* ptr = Subst.eval_annot subst ptr in
       let* ptr =
         Core_value.cast_ptr ptr
@@ -126,7 +123,7 @@ and produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
       let* v = Core_value.nondet_bt ty in
       let+ state = State.produce_owned ptr cty v state in
       (v, (subst, state))
-  | Owned (cty, Uninit), [] ->
+  | Owned (cty, Uninit), [ ptr ] ->
       let* ptr = Subst.eval_annot subst ptr in
       let* ptr =
         Core_value.cast_ptr ptr
@@ -141,24 +138,22 @@ and produce_p_resource (subst, state) (name : Mu.Request.name) ptr iargs ty =
       let def = Ctx.get_pred_def sym in
       let ret_ty = snd def.oarg in
       let* v = Core_value.nondet_bt ret_ty in
-      let* ptr = Subst.eval_annot subst ptr in
       let* iargs = map_list ~f:(Subst.eval_annot subst) iargs in
       (* I think CN never produces non-recursive predicates?
          So let's just unfold them *)
       if def.recursive then
         (* Cn predicates have a unique out-param. *)
-        let+ state = State.produce_pred sym (ptr :: iargs) [ v ] state in
+        let+ state = State.produce_pred sym iargs [ v ] state in
         (v, (subst, state))
       else
-        let+ v, state = produce_pred_def ~name:sym state def ptr iargs in
+        let+ v, state = produce_pred_def ~name:sym state def iargs in
         (v, (subst, state))
-  | Owned _, _ :: _ -> not_impl "produce_p_resource: Owned with iargs"
+  | Owned _, _ -> not_impl "produce_p_resource: Owned expects a single pointer"
 
-and produce_resource (subst, state) (req : Cn.Request.t) (ty : Cn.BaseTypes.t) :
+and produce_resource (subst, state) (req : Mu.Request.t) (ty : Cn.BaseTypes.t) :
     (Core_value.t * (Subst.t * State.t option)) Csymex.t =
   match req with
-  | P { name; pointer; iargs } ->
-      produce_p_resource (subst, state) name pointer iargs ty
+  | P { name; iargs } -> produce_p_resource (subst, state) name iargs ty
   | Q _ -> not_impl "produce_resource: Q"
 
 and produce_logical_arg (subst, state)
@@ -260,18 +255,18 @@ let rec find_clause_consume (subst, state) (clauses : Mu.clause list) :
         Compo_res.Ok (ret, state)
       else find_clause_consume (subst, state) rest
 
-and consume_pred_def ~name state (def : Mu.predicate_def) (ptr : Core_value.t)
+and consume_pred_def ~name state (def : Mu.predicate_def)
     (iargs : Core_value.t list) =
   [%l.trace "Consuming the definition of %a" Symbol_std.pp name];
   let@@ () = Csymex.with_loc ~loc:def.loc in
-  let subst = subst_for_pred_def def ptr iargs in
+  let subst = subst_for_pred_def def iargs in
   let* clauses =
     of_opt_not_impl ~msg:"consume_pred_def: no clauses" def.clauses
   in
   (* We consume at most one case if we are guaranteed it matches *)
   find_clause_consume (subst, state) clauses
 
-and consume_p_resrouce (subst, state) (name : Mu.Request.name) ptr iargs :
+and consume_p_resrouce (subst, state) (name : Mu.Request.name) iargs :
     (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
   let* loc = Csymex.get_loc () in
   let mk_trace msg = Soteria.Terminal.Call_trace.singleton ~loc ~msg () in
@@ -290,18 +285,15 @@ and consume_p_resrouce (subst, state) (name : Mu.Request.name) ptr iargs :
       x
   in
   match (name, iargs) with
-  | Owned (cty, kind), [] ->
+  | Owned (cty, kind), [ ptr ] ->
       consume_owned_pred cty kind ptr subst state |> lift_error
   | PName sym, iargs -> (
-      (* So ptr is the first argument? *)
-      let* ptr = Subst.eval_annot subst ptr in
       let* (iargs : Core_value.t list) =
         map_list ~f:(Subst.eval_annot subst) iargs
       in
       let* first_res =
         let** vs, state =
-          SState.SM.Result.run_with_state ~state
-            (State.consume_pred sym (ptr :: iargs))
+          SState.SM.Result.run_with_state ~state (State.consume_pred sym iargs)
           |> lift_error
         in
         (* Cn predicates have a unique out-parameter *)
@@ -313,19 +305,18 @@ and consume_p_resrouce (subst, state) (name : Mu.Request.name) ptr iargs :
       | Error _ | Missing _ -> (
           [%l.trace "Auto-fold attempt for %a" Symbol_std.pp sym];
           let def = Ctx.get_pred_def sym in
-          let+ snd_res = consume_pred_def ~name:sym state def ptr iargs in
+          let+ snd_res = consume_pred_def ~name:sym state def iargs in
           match snd_res with
           | Compo_res.Ok (v, state) -> Compo_res.Ok (v, (subst, state))
           | Error _ | Missing _ ->
               (* Otherwise, we give the error of the first attempt *)
               first_res))
-  | Owned _, _ :: _ -> not_impl "consume_p_resource: Owned with iargs"
+  | Owned _, _ -> not_impl "consume_p_resource: Owned expects a single pointer"
 
-and consume_resource (subst, state) (req : Cn.Request.t) :
+and consume_resource (subst, state) (req : Mu.Request.t) :
     (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
   match req with
-  | P { name; pointer; iargs } ->
-      consume_p_resrouce (subst, state) name pointer iargs
+  | P { name; iargs } -> consume_p_resrouce (subst, state) name iargs
   | Q _ -> not_impl "consume_resource: Q"
 
 and consume_logical_arg (subst, state)

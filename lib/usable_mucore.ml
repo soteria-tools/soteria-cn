@@ -6,7 +6,6 @@ module Sym = Soteria_c_lib.Symbol_std
 
 module Locations = Cn.Locations
 module IndexTerms = Cn.IndexTerms
-module Request = Cn.Request
 module BaseTypes = Cn.BaseTypes
 module LogicalConstraints = Cn.LogicalConstraints
 module Sctypes = Cn.Sctypes
@@ -25,6 +24,46 @@ type integer_type = CF.Ctype.integerType
 type iop = CF.Core.iop
 type memory_order = CF.Cmm_csem.memory_order
 type linux_memory_order = CF.Linux.linux_memory_order
+
+(* ──────────────────── resource requests ([Cn.Request]) ──────────────────── *)
+
+(** CN's [Cn.Request], re-owned as part of the AST. As with {!predicate_def},
+    the pointer a (non-quantified) predicate request is about is folded into the
+    head of [iargs] rather than kept in a separate field. The translation from
+    [Cn.Request] lives in {!Of_mucore.request}. *)
+module Request = struct
+  (* Bridge from Cerberus' PPrint leaf printers; mirrors the top-level [pp_pp]. *)
+  let pprint pp ft x = Fmt.string ft (Cn.Pp.plain (pp x))
+  let pp_it = pprint IndexTerms.pp
+  let pp_sct = pprint Sctypes.pp
+
+  type init = Init | Uninit
+  type name = Owned of Sctypes.t * init | PName of Sym.t
+
+  module Predicate = struct
+    type t = { name : name; iargs : IndexTerms.t list }
+    (** [iargs] leads with the pointer the request is about. *)
+  end
+
+  (* Quantified ("each") requests aren't reworked yet: kept as CN's own type. *)
+  module QPredicate = Cn.Request.QPredicate
+
+  type t = P of Predicate.t | Q of QPredicate.t
+
+  let pp_name ?(no_nums = false) ft = function
+    | Owned (ct, Init) -> Fmt.pf ft "RW<%a>" pp_sct ct
+    | Owned (ct, Uninit) -> Fmt.pf ft "W<%a>" pp_sct ct
+    | PName pn -> (if no_nums then Sym.pp_sym_hum else Sym.pp) ft pn
+
+  let pp_predicate ?no_nums ft (p : Predicate.t) =
+    Fmt.pf ft "@[<2>%a(%a)@]" (pp_name ?no_nums) p.name
+      Fmt.(list ~sep:comma pp_it)
+      p.iargs
+
+  let pp ?no_nums ft = function
+    | P p -> pp_predicate ?no_nums ft p
+    | Q q -> pprint (fun q -> Cn.Request.pp_aux (Cn.Request.Q q) None) ft q
+end
 
 (* ───────────────────────────── AST ───────────────────────────── *)
 
@@ -332,7 +371,6 @@ type clause = {
 
 type predicate_def = {
   loc : Locations.t;
-  pointer : Sym.t;
   iargs : (Sym.t * BaseTypes.t) list;
   oarg : Locations.t * BaseTypes.t;
   clauses : clause list option;
@@ -397,7 +435,7 @@ let pp_sym = Sym.pp
 let pp_id = pp_pp Id.pp
 let pp_loc = pp_pp Locations.pp
 let pp_it = pp_pp IndexTerms.pp
-let pp_request = pp_pp Request.pp
+let pp_request ft r = Request.pp ft r
 let pp_bt = pp_pp BaseTypes.pp
 let pp_lc = pp_pp LogicalConstraints.pp
 let pp_sct = pp_pp Sctypes.pp
@@ -674,13 +712,11 @@ let pp_to_extract ft = function
   | CF.Cn.E_Pred _ -> Fmt.string ft "pred"
 
 let pp_pred ft (p : Request.Predicate.t) =
-  Fmt.pf ft "@[<2>%a%a@]"
-    (pp_pp (Request.pp_name ~no_nums:true))
-    p.name (pp_paren pp_it) (p.pointer :: p.iargs)
+  Request.pp_predicate ~no_nums:true ft p
 
 let pp_pred_or_name ft = function
   | Predicate p -> pp_pred ft p
-  | PredicateName n -> pp_pp (Request.pp_name ~no_nums:true) ft n
+  | PredicateName n -> Request.pp_name ~no_nums:true ft n
 
 let pp_cn_statement ft = function
   | Pack_unpack (pu, p) ->
@@ -999,16 +1035,35 @@ module Of_mucore = struct
   let paction (Mu.Paction (polarity, Mu.Action (loc, a_))) : action =
     { loc; polarity; action = action_ a_ }
 
+  (* [Cn.Request] → our {!Request}: the only reshaping is folding a predicate's
+     pointer into the head of [iargs]; quantified requests pass through. *)
+  let request_name : Cn.Request.name -> Request.name = function
+    | Owned (ct, Init) -> Owned (ct, Init)
+    | Owned (ct, Uninit) -> Owned (ct, Uninit)
+    | PName s -> PName s
+
+  let request_predicate (p : Cn.Request.Predicate.t) : Request.Predicate.t =
+    { name = request_name p.name; iargs = p.pointer :: p.iargs }
+
+  let request : Cn.Request.t -> Request.t = function
+    | P p -> P (request_predicate p)
+    | Q q -> Q q
+
+  let request_resource ((req, bt) : Cn.Request.t * BaseTypes.t) :
+      Request.t * BaseTypes.t =
+    (request req, bt)
+
   let predicate_or_predicate_name :
       Cnstatement.predicate_or_predicate_name -> predicate_or_predicate_name =
     function
-    | Cnstatement.Predicate p -> Predicate p
-    | Cnstatement.PredicateName n -> PredicateName n
+    | Cnstatement.Predicate p -> Predicate (request_predicate p)
+    | Cnstatement.PredicateName n -> PredicateName (request_name n)
 
   let cn_statement : Cnstatement.statement -> cn_statement = function
     | Cnstatement.Pack_unpack (pu, p) ->
         Pack_unpack (pu, predicate_or_predicate_name p)
-    | Cnstatement.To_from_bytes (tf, p) -> To_from_bytes (tf, p)
+    | Cnstatement.To_from_bytes (tf, p) ->
+        To_from_bytes (tf, request_predicate p)
     | Cnstatement.Have lc -> Have lc
     | Cnstatement.Instantiate (i, it) -> Instantiate (i, it)
     | Cnstatement.Split_case lc -> Split_case lc
@@ -1117,7 +1172,7 @@ module Of_mucore = struct
         ((Define (s, it), info) :: l, b)
     | Mu.Resource ((s, rbt), info, rest) ->
         let l, b = arguments_l f rest in
-        ((Resource (s, rbt), info) :: l, b)
+        ((Resource (s, request_resource rbt), info) :: l, b)
     | Mu.Constraint (lc, info, rest) ->
         let l, b = arguments_l f rest in
         ((Constraint lc, info) :: l, b)
@@ -1134,7 +1189,7 @@ module Of_mucore = struct
         ((Define (s, it), info) :: l, b)
     | Resource ((s, rbt), info, rest) ->
         let l, b = logical_argument_types_l f rest in
-        ((Resource (s, rbt), info) :: l, b)
+        ((Resource (s, request_resource rbt), info) :: l, b)
     | Constraint (lc, info, rest) ->
         let l, b = logical_argument_types_l f rest in
         ((Constraint lc, info) :: l, b)
@@ -1161,7 +1216,7 @@ module Of_mucore = struct
       | LogicalReturnTypes.Define ((s, it), info, rest) ->
           (Define (s, it), info) :: aux rest
       | LogicalReturnTypes.Resource ((s, rbt), info, rest) ->
-          (Resource (s, rbt), info) :: aux rest
+          (Resource (s, request_resource rbt), info) :: aux rest
       | LogicalReturnTypes.Constraint (lc, info, rest) ->
           (Constraint lc, info) :: aux rest
       | LogicalReturnTypes.I -> []
@@ -1180,7 +1235,7 @@ module Of_mucore = struct
         ((Define (s, it), info) :: l, b)
     | LogicalArgumentTypes.Resource ((s, rbt), info, rest) ->
         let l, b = argument_types_l f rest in
-        ((Resource (s, rbt), info) :: l, b)
+        ((Resource (s, request_resource rbt), info) :: l, b)
     | LogicalArgumentTypes.Constraint (lc, info, rest) ->
         let l, b = argument_types_l f rest in
         ((Constraint lc, info) :: l, b)
@@ -1259,7 +1314,9 @@ module Of_mucore = struct
       ({ loc; pointer; iargs; oarg; clauses; recursive; attrs } :
         Definition.Predicate.t) : predicate_def =
     let clauses = Option.map (List.map clause) clauses in
-    { loc; pointer; iargs; oarg; clauses; recursive; attrs }
+    (* CN keeps the predicate's pointer separate; we make it the first iarg. *)
+    let iargs = (pointer, BaseTypes.Loc ()) :: iargs in
+    { loc; iargs; oarg; clauses; recursive; attrs }
 
   let file (f : unit Mu.file) : file =
     {
