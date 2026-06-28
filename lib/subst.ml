@@ -21,7 +21,7 @@ end
 
 let pp ft t =
   Fmt.iter_bindings ~sep:Fmt.cut iter
-    (fun ft (k, v) -> Fmt.pf ft "%a -> %a" Symbol_std.pp k Core_value.pp v)
+    (fun ft (k, v) -> Fmt.pf ft "%a -> %a" Symbol_std.pp_hum k Core_value.pp v)
     ft t
 
 let rec assign_pattern subst (pat : pattern) (v : Core_value.t) : t Csymex.t =

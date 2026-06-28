@@ -279,7 +279,10 @@ and consume_predicate sym iargs : (Core_value.t, _, _) State.SM.Result.t =
   match first_res with
   | Ok _ -> return first_res
   | Error _ | Missing _ -> (
-      [%l.trace "Auto-fold attempt for %a" Sym.pp_hum sym];
+      [%l.trace
+        "Auto-fold attempt for %a(%a, _)" Sym.pp_hum sym
+          Fmt.(list ~sep:comma Core_value.pp)
+          iargs];
       let def = Ctx.get_pred_def sym in
       let+ snd_res = consume_pred_def ~name:sym def iargs in
       match snd_res with
@@ -322,10 +325,11 @@ let consume_return_type ~subst (ty : Mu.return_type) (ret : Core_value.t) :
   let open State.SM.Syntax in
   let* state = State.SM.get_state () in
   [%l.debug
-    "@[<v 2>Consuming return type: %a@]@.@[<v 2>with state:@ %a@]"
-      Mu.pp_return_type ty
+    "@[<v 2>Consuming return type: %a@]@.@[<v 2>with state:@ %a@]@.@[<v 2>and \
+     subst:@ %a@]"
+    Mu.pp_return_type ty
       (Fmt.option @@ State.pp_pretty ~ignore_freed:true)
-      state];
+      state Subst.pp subst];
   let subst = Subst.add (fst ty.ret) ret subst in
   let++ v, _subst =
     Consumer.run_with_subst ~subst
