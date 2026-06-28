@@ -60,7 +60,6 @@ let rec pp ft (v : t) =
   | Bool b -> Typed.ppa ft b
 
 let show = Fmt.to_to_string pp
-
 let true_ = Bool Typed.v_true
 let false_ = Bool Typed.v_false
 
@@ -447,6 +446,29 @@ module Syn = struct
   let subst _ _ = L.failwith "Core_value.subst: not implemented"
   let learn_eq _ _ = L.failwith "Core_value.learn_eq: not implemented"
   let exprs_syn _ = L.failwith "Core_value.exprs_syn: not implemented"
+
+  (* This is mostly where variable iteration belongs, but suddenly when it come to reason about heuristics, we must iterate over variables. *)
+  let rec iter_vars_obj o f =
+    let open Typed in
+    match o with
+    | Int i -> Svalue.iter_vars (Expr.of_value i) f
+    | Float fs -> Svalue.iter_vars (Expr.of_value fs) f
+    | Ptr p -> Svalue.iter_vars (Expr.of_value p) f
+    | Array elems -> List.iter (fun e -> iter_vars_loaded e f) elems
+    | Struct { members; _ } -> List.iter (fun m -> iter_vars_loaded m f) members
+    | Fn _ -> ()
+
+  and iter_vars_loaded o f =
+    match o with Spec o -> iter_vars_obj o f | Unspec -> ()
+
+  and iter_vars v f =
+    match v with
+    | Obj o -> iter_vars_obj o f
+    | Loaded l -> iter_vars_loaded l f
+    | List vs | Tuple vs -> List.iter (fun v -> iter_vars v f) vs
+    | Record fields -> List.iter (fun (_, v) -> iter_vars v f) fields
+    | Bool b -> Typed.Svalue.iter_vars (Typed.Expr.of_value b) f
+    | Type _ | Unit -> ()
 end
 
 include Syn

@@ -22,9 +22,20 @@ module M (Symex : Symex.Base) = struct
       states, and are matched against using entailments. *)
   module Uninterpreted (Name : Name) (V : V) = struct
     type pred = Name.t * V.t list * V.t list
-    [@@deriving show { with_path = false }]
 
-    type t = pred list [@@deriving show { with_path = false }]
+    let pp_pred ft (name, ins, outs) =
+      Fmt.pf ft "%a(%a; %a)" Name.pp name
+        (Fmt.list ~sep:Fmt.comma V.pp)
+        ins
+        (Fmt.list ~sep:Fmt.comma V.pp)
+        outs
+
+    let show_pred = Fmt.to_to_string pp_pred
+
+    type t = pred list
+
+    let pp ft t = Fmt.list ~sep:Fmt.sp pp_pred ft t
+    let show = Fmt.to_to_string pp
 
     type syn = Name.t * V.syn list * V.syn list
     [@@deriving show { with_path = false }]
@@ -39,17 +50,24 @@ module M (Symex : Symex.Base) = struct
     let ins_outs (_, ins, outs) =
       (List.concat_map V.exprs_syn ins, List.concat_map V.exprs_syn outs)
 
-    (* let index_with_max_heurisitcs (heuristics : V.t unfold_heuristics)
-        (st : t option) : (Name.t * V.t list) option =
-      of_opt st
-      |> List.fold_left
-           (fun acc (name, ins, _) ->
-             match (acc, heuristics ins) with
-             | None, Some j -> Some (name, ins, j)
-             | Some (_, _, j), Some j' when j < j' -> Some (name, ins, j')
-             | _ -> acc)
-           None
-      |> Option.map (fun (name, ins, _) -> (name, ins)) *)
+    (** Removes the folded predicate with the highest score according to the
+        heuristics. *)
+    let take_max_with_heurisitcs (heuristics : V.t unfold_heuristics)
+        (st : t option) : (pred * t option) option =
+      let open Syntaxes.Option in
+      let st = of_opt st in
+      let* idx, _score =
+        Iter.foldi
+          (fun acc idx (_, ins, outs) ->
+            match (acc, heuristics ins outs) with
+            | None, Some score -> Some (idx, score)
+            | Some (_, score), Some score' when score < score' ->
+                Some (idx, score')
+            | _ -> acc)
+          None (Iter.of_list st)
+      in
+      let+ elem, rest = List.take_nth idx st in
+      (elem, to_opt rest)
 
     let rec sure_list_eq (l1 : V.t list) (l2 : V.t list) : bool Symex.t =
       let open Symex.Syntax in
@@ -118,19 +136,6 @@ module M (Symex : Symex.Base) = struct
     type t = { base : B.t option; preds : Uninterpreted.t option }
     [@@deriving sym_state { symex = Symex }]
 
-    (* let with_base ?(retry : V.t unfold_heuristics option) f =
-      let open Symex in
-      let open Symex.Syntax in
-      fun (state : SM.st) ->
-        let { preds; base } = of_opt state in
-        let* v, base = f base in
-        match v with
-        | Compo_res.Ok v -> Symex.return (Compo_res.Ok v, to_opt { preds; base })
-        | (Compo_res.Missing _ | Error _) as v -> (
-            match retry with
-            | None -> Symex.return (v, state)
-            | Some heuristics -> L.failwith "Don't have heuristics yet") *)
-
     let produce_pred name ins outs state =
       let open Symex.Syntax in
       let { preds; base } = of_opt state in
@@ -138,6 +143,37 @@ module M (Symex : Symex.Base) = struct
       to_opt { preds; base }
 
     let consume_pred name ins = with_preds (Uninterpreted.consume' name ins)
+
+    let with_recovery_attempt ~produce_def ~heuristics
+        (f : ('a, 'err, syn list) SM.Result.t) :
+        ('a, 'err, syn list) SM.Result.t =
+      let open Symex.Syntax in
+      fun state ->
+        let* first_res, first_state = f state in
+        match first_res with
+        | Compo_res.Ok _ -> Symex.return (first_res, first_state)
+        | Missing _ | Error _ -> (
+            (* We give another attempt by finding a matching predicate to unfold *)
+            let { preds; base } = of_opt first_state in
+            match Uninterpreted.take_max_with_heurisitcs heuristics preds with
+            | None ->
+                [%l.debug
+                  "Heuristics failed to find any predicate to unfold in \
+                   recovery."];
+                Symex.return (first_res, first_state)
+            | Some (p, preds) -> (
+                [%l.debug
+                  "Unfolding predicate %a in recovery" Uninterpreted.pp_pred p];
+                let name, ins, outs = p in
+                let state' = to_opt { preds; base } in
+                let* state' = produce_def name ins outs state' in
+                (* We execute the operation a second time hoping for a better outcome. *)
+                let* snd_res, snd_state = f state' in
+                match snd_res with
+                | Ok _ -> Symex.return (snd_res, snd_state)
+                | Missing _ | Error _ ->
+                    (* We failed even with our recovery tactic, we return the first return before the attempt. *)
+                    Symex.return (first_res, first_state)))
 
     open SM
     open SM.Syntax

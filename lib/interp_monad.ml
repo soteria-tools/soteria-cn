@@ -93,16 +93,26 @@ module State = struct
 
   let store ptr ty v =
     let@@ () = with_miss_as_error in
+    let relevant_values =
+     fun f ->
+      f ptr;
+      f v
+    in
     let* ptr = CV.cast_ptr ptr in
     let ty = Cn.Sctypes.to_ctype ty in
     let v = Core_value.to_agv v in
-    SState.store ptr ty v
+    Cn_assert.with_recovery_attempt ~values:relevant_values
+      (SState.store ptr ty v)
 
   let load ptr ty =
     let@@ () = with_miss_as_error in
+    let relevant_values = Iter.singleton ptr in
     let* ptr = CV.cast_ptr ptr in
     let ty = Cn.Sctypes.to_ctype ty in
-    let+ v = SState.load ptr ty in
+    let+ v =
+      Cn_assert.with_recovery_attempt ~values:relevant_values
+        (SState.load ptr ty)
+    in
     Core_value.of_agv ~ty v
 
   let free ptr =

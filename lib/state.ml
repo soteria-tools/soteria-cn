@@ -65,10 +65,10 @@ let lift_produce (f : SState.t option -> SState.t option Csymex.t) :
     PState.to_opt { preds; base }
 
 let pp_pretty ~ignore_freed ft { base; preds } =
-  Fmt.pf ft "@[<v 2>State:@ %a@]@.@[<v 2>Predicates:@ %a@]"
-    (Fmt.Dump.option @@ SState.pp_pretty ~ignore_freed)
+  Fmt.pf ft "@[<v 2>State:@ %a@]@ @[<v 2>Predicates:@ %a@]"
+    (Fmt.option ~none:(Fmt.any "Empty Heap") @@ SState.pp_pretty ~ignore_freed)
     base
-    (Fmt.Dump.option @@ Uninterpreted.pp)
+    (Fmt.option @@ Uninterpreted.pp)
     preds
 
 let produce_owned ptr cty v = lift_produce (SState.produce_owned ptr cty v)

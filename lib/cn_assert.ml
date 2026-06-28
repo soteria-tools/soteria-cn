@@ -64,8 +64,22 @@ let produce_pure (subst, state) (annot : annot) :
   let+ () = assume [ v ] in
   (subst, state)
 
-let rec produce_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t)
-    : (Subst.t * State.t option) Csymex.t =
+let rec with_recovery_attempt ~values f =
+  State.with_recovery_attempt
+    ~heuristics:(Unfold_heuristics.heuristics values)
+    ~produce_def:(fun name ins outs state ->
+      let def = Ctx.get_pred_def name in
+      (* FIXME: we need to cleanup that interface, the CN ptr split is a bit all over the place. *)
+      let* res, state =
+        produce_pred_def ~name state def (List.hd ins) (List.tl ins)
+      in
+      let out = List.hd outs in
+      let+ () = Csymex.assume [ Core_value.sem_eq res out ] in
+      state)
+    f
+
+and produce_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
+    (Subst.t * State.t option) Csymex.t =
   match lc with
   | T it -> produce_pure (subst, state) it
   | Forall _ -> not_impl "consume_logical_constraint: Forall"
@@ -347,6 +361,10 @@ let consume_return_type (ty : Mu.return_type) (ret : Core_value.t) subst state :
       Cn_error.with_trace,
       State.syn list )
     Csymex.Result.t =
-  [%l.trace "Consuming return type: %a" Mu.pp_return_type ty];
+  [%l.debug
+    "@[<v 2>Consuming return type: %a@]@.@[<v 2>with state:@ %a@]"
+      Mu.pp_return_type ty
+      (Fmt.option @@ State.pp_pretty ~ignore_freed:true)
+      state];
   let subst = Subst.add (fst ty.ret) ret subst in
   Result.fold_list ~init:(subst, state) ~f:consume_logical_arg ty.logic

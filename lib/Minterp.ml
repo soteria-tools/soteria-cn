@@ -105,6 +105,11 @@ let eval_ctor (ctor : CF.Core.ctor) (vs : Core_value.t list) :
 let exec_spec ~subst (arguments : arguments) (return_type : return_type) :
     Core_value.t InterpM.t =
   let* state = get_state () in
+  [%l.debug
+    "@[<v 2>About to execute specification with state: %a@]@.@[<v 2>Subst:@ \
+     %a@]"
+      (Fmt.Dump.option @@ SState.pp_pretty ~ignore_freed:true)
+      state Subst.pp subst];
   let* subst, state =
     InterpM.lift_symex_res @@ Cn_assert.consume_arguments arguments subst state
   in
@@ -155,6 +160,10 @@ let eval_memop (memop : Symbol_std.t CF.Mem_common.generic_memop)
       let* p2 = CV.cast_ptr p2 in
       (* Is this correct? I forgot the semantics of pointer equality *)
       ok (Core_value.Bool (p1 ==@ p2))
+  | PtrNe, [ p1; p2 ] ->
+      let* p1 = CV.cast_ptr p1 in
+      let* p2 = CV.cast_ptr p2 in
+      ok (Core_value.Bool (Typed.Bool.not (p1 ==@ p2)))
   | (PtrWellAligned | PtrValidForDeref), _args ->
       (* Pointer validity for dereference should be handled by the state.
          For alignment, we could also do the Soteria Rust trick of embedding the alignment in the pointer representation. *)
@@ -324,9 +333,9 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
 and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
     Core_value.t ExprM.t =
   let open ExprM.Syntax in
-  [%l.trace "@[<v 2>Evaluating expr:@ %a@]" Mu.pp_expr body];
+  [%l.debug "@[<v 2>Evaluating expr:@ %a@]" Mu.pp_expr body];
   let@ () = with_loc ~loc:body.loc in
-  [%l.debug "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
+  [%l.trace "@[<v 4>Substitution:@ %a@]" Subst.pp subst];
   let* st = get_state () in
   [%l.trace
     "@[<v 4>Current state:@ %a@]"
