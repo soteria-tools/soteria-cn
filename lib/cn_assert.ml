@@ -62,16 +62,20 @@ let produce_pure (subst, state) (annot : annot) :
   let+ () = assume [ v ] in
   (subst, state)
 
-let rec with_recovery_attempt ~values f =
+let rec produce_def_s name ins outs state =
+  let def = Ctx.get_pred_def name in
+  let* res, state = produce_pred_def ~name state def ins in
+  let out = List.hd outs in
+  let+ () = Csymex.assume [ Core_value.sem_eq res out ] in
+  state
+
+and unfold_with_heuristics heuristics =
+  State.unfold_with_heuristics ~produce_def:produce_def_s heuristics
+
+and with_recovery_attempt ~values f =
   State.with_recovery_attempt
-    ~heuristics:(Unfold_heuristics.heuristics values)
-    ~produce_def:(fun name ins outs state ->
-      let def = Ctx.get_pred_def name in
-      let* res, state = produce_pred_def ~name state def ins in
-      let out = List.hd outs in
-      let+ () = Csymex.assume [ Core_value.sem_eq res out ] in
-      state)
-    f
+    ~heuristics:(Unfold_heuristics.recovery_heuristics values)
+    ~produce_def:produce_def_s f
 
 and produce_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
     (Subst.t * State.t option) Csymex.t =
@@ -110,7 +114,8 @@ and produce_pred_def ~name state (def : Mu.predicate_def)
   in
   (v, state)
 
-and produce_owned_resource (subst, state) ~cty ~(kind : Mu.Request.init) ~ptr ty =
+and produce_owned_resource (subst, state) ~cty ~(kind : Mu.Request.init) ~ptr ty
+    =
   let* ptr = Subst.eval_annot subst ptr in
   let* ptr =
     Core_value.cast_ptr ptr

@@ -338,3 +338,11 @@ missing abstractions in Core.
 
 Best effort abstraction is the 50% of reason why I wanted to create Soteria
 and get rid of the "intermediate language to rule them all".
+
+## Heuristics
+
+In Core, I don't know what if/else expression comes from an actual if/else statement
+written in the program, against what if/else comes from the compilation of some arbitrary thing.
+This makes verification heuristics harder to implement, because I don't know that
+the user's program explicity branches on a certain value, and therefore I should
+figure out if I have matching predicates that should be unfolded as well.

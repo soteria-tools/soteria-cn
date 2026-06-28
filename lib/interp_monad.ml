@@ -19,6 +19,8 @@ let lift_symex_res (type a)
     (s : (a, Cn_error.with_trace, SState.syn list) Csymex.Result.t) : a t =
   SState.SM.lift s
 
+let lift_sm x = SState.SM.map Compo_res.ok x
+
 let with_extra_call_trace ~loc ~msg : 'a t -> 'a t =
   map_error @@ fun (e, trace) ->
   let elem = Soteria.Terminal.Call_trace.mk_element ~loc ~msg () in
@@ -59,6 +61,14 @@ module Syntax = struct
 
   module Symex_syntax = Syntax.Symex_syntax
 end
+
+let assert_or_error (b : Typed.(T.sbool t)) err : unit t =
+  let open Syntax in
+  let*^ loc = Csymex.get_loc () in
+  let err =
+    (err, Soteria.Terminal.Call_trace.singleton ~loc ~msg:"Assert failure" ())
+  in
+  SState.SM.assert_or_error b err
 
 module State = struct
   open Syntax
@@ -117,6 +127,19 @@ module State = struct
 
   let free ptr =
     let@@ () = with_miss_as_error in
+    let relevant_values = Iter.singleton ptr in
     let* ptr = CV.cast_ptr ptr in
-    SState.free ptr
+    Cn_assert.with_recovery_attempt ~values:relevant_values (SState.free ptr)
+
+  let unfold_on_if_else guard =
+    [%l.debug
+      "If/else guard is %a, finding something to unfold." Core_value.pp guard];
+    let+ could_unfold =
+      lift_sm
+      @@ Cn_assert.unfold_with_heuristics
+           (Unfold_heuristics.if_else_heuristics guard)
+    in
+    if could_unfold then
+      [%l.debug "Successfully unfolded something for the if/else guard."]
+    else [%l.debug "Nothing to unfold for the if/else guard."]
 end

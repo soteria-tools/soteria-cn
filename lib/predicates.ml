@@ -144,6 +144,24 @@ module M (Symex : Symex.Base) = struct
 
     let consume_pred name ins = with_preds (Uninterpreted.consume' name ins)
 
+    let unfold_with_heuristics ~produce_def heuristics =
+      let open SM in
+      let open Syntax in
+      let* state = get_state () in
+      let { preds; base } = of_opt state in
+      match Uninterpreted.take_max_with_heurisitcs heuristics preds with
+      | None ->
+          [%l.debug "Heuristics failed to find any predicate to unfold."];
+          return false
+      | Some (p, preds) ->
+          [%l.debug
+            "Heuristics is unfolding predicate %a" Uninterpreted.pp_pred p];
+          let name, ins, outs = p in
+          let state = to_opt { preds; base } in
+          let*^ state = produce_def name ins outs state in
+          let+ () = set_state state in
+          true
+
     let with_recovery_attempt ~produce_def ~heuristics
         (f : ('a, 'err, syn list) SM.Result.t) :
         ('a, 'err, syn list) SM.Result.t =
@@ -154,26 +172,18 @@ module M (Symex : Symex.Base) = struct
         | Compo_res.Ok _ -> Symex.return (first_res, first_state)
         | Missing _ | Error _ -> (
             (* We give another attempt by finding a matching predicate to unfold *)
-            let { preds; base } = of_opt first_state in
-            match Uninterpreted.take_max_with_heurisitcs heuristics preds with
-            | None ->
-                [%l.debug
-                  "Heuristics failed to find any predicate to unfold in \
-                   recovery."];
-                Symex.return (first_res, first_state)
-            | Some (p, preds) -> (
-                [%l.debug
-                  "Unfolding predicate %a in recovery" Uninterpreted.pp_pred p];
-                let name, ins, outs = p in
-                let state' = to_opt { preds; base } in
-                let* state' = produce_def name ins outs state' in
-                (* We execute the operation a second time hoping for a better outcome. *)
-                let* snd_res, snd_state = f state' in
-                match snd_res with
-                | Ok _ -> Symex.return (snd_res, snd_state)
-                | Missing _ | Error _ ->
-                    (* We failed even with our recovery tactic, we return the first return before the attempt. *)
-                    Symex.return (first_res, first_state)))
+            let* could_unfold, state' =
+              unfold_with_heuristics ~produce_def heuristics first_state
+            in
+            if not could_unfold then Symex.return (first_res, first_state)
+            else
+              (* We execute the operation a second time hoping for a better outcome. *)
+              let* snd_res, snd_state = f state' in
+              match snd_res with
+              | Ok _ -> Symex.return (snd_res, snd_state)
+              | Missing _ | Error _ ->
+                  (* We failed even with our recovery tactic, we return the first return before the attempt. *)
+                  Symex.return (first_res, first_state))
 
     open SM
     open SM.Syntax

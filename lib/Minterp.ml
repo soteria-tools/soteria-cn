@@ -304,6 +304,7 @@ and eval_pexpr (subst : Subst.t) (pexpr : pexpr) =
       ok (Core_value.Bool.of_bool res)
   | PEif { cond; then_; else_ } ->
       let* guard = eval_pexpr subst cond in
+      let* () = State.unfold_on_if_else guard in
       let guard = Core_value.Bool.to_sbool guard in
       if%sat guard then eval_pexpr subst then_ else eval_pexpr subst else_
   | PEconv_int { ty; arg } -> (
