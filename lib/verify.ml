@@ -33,9 +33,10 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
     |> Result.map_error (fun ((err, tr), _) -> ((err :> Cn_error.t), tr))
   in
   let ret = Minterp.ExprM.returned_value result in
-  let** _, st =
-    Cn_assert.consume_return_type return_type ret subst state
-    |> Result.map_error (fun (err, tr) -> ((err :> Cn_error.t), tr))
+  let** (), state =
+    State.SM.Result.run_with_state ~state
+      (Cn_assert.consume_return_type ~subst return_type ret)
+    |> Result.map_error (fun ((err, tr), _) -> ((err :> Cn_error.t), tr))
   in
   let fn_call_trace elements =
     elements
@@ -44,11 +45,11 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
           ~msg:"Memory leftover after this function" ();
       ]
   in
-  match State.leaks st with
+  match State.leaks state with
   | [] -> Result.ok ()
   | leaks ->
       [%l.debug
-        "@[<v 2>Memory leak in state:@ %a@]" (Fmt.Dump.option @@ State.pp) st];
+        "@[<v 2>Memory leak in state:@ %a@]" (Fmt.Dump.option @@ State.pp) state];
       let elems =
         List.filter_map
           (Option.map (fun loc ->

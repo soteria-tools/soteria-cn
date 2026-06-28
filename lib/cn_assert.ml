@@ -8,6 +8,7 @@ open Csymex
 open Syntax
 open Soteria_c_helpers
 module Producer = Producer_monad
+module Consumer = Consumer_monad
 module Sym = Soteria_c_lib.Symbol_std
 
 type term = Cn.(BaseTypes.t Terms.term)
@@ -23,27 +24,24 @@ let subst_for_pred_def (def : Mu.predicate_def) iargs =
   |> Iter.map (fun ((sym, _), v) -> (sym, v))
   |> Subst.of_iter
 
-(* Sound only in OX mode, of course *)
-let logic_assert v =
-  let*- err = Csymex.assert_or_error v (`Lfail v :> Cn_error.t) in
-  let* loc = get_loc () in
-  [%l.trace "Cannot prove this holds: %a" Cn_error.pp err];
-  Csymex.log_solver_state ~level:Debug ();
-  let err =
-    ( err,
-      Soteria.Terminal.Call_trace.singleton ~loc
-        ~msg:"Could not prove this holds" () )
-  in
-  Result.error err
+let lift_pure_error ~v m =
+  let open State.SM.Syntax in
+  let*^ loc = Csymex.get_loc () in
+  let mk_trace msg = Soteria.Terminal.Call_trace.singleton ~loc ~msg () in
+  let+ res = m in
+  match res with
+  | Compo_res.Ok x -> Compo_res.Ok x
+  | Missing _ -> L.failwith "Cannot miss on pure consumption"
+  | Error e ->
+      [%l.debug "Could not prove %a holds in the pc below" Typed.ppa v];
+      Csymex.log_solver_state ~level:Debug ();
+      let trace = mk_trace "Could not prove this holds" in
+      Error (e, trace)
 
-(* This is [Symex.Producer.apply_subst], but re-implemented for the needs of CN. *)
-let subst_or_extend ~ty sym subst =
-  match Subst.find_opt sym subst with
-  | Some v -> return (v, subst)
-  | None ->
-      let* v = Core_value.nondet_bt ty in
-      let subst = Subst.add sym v subst in
-      return (v, subst)
+(* Sound only in OX mode, of course *)
+let logic_assert v : unit Consumer.t =
+  Consumer.lift_state @@ lift_pure_error ~v
+  @@ State.SM.assert_or_error v (`Lfail v :> Cn_error.t)
 
 let produce_computational_arg
     ((arg, loc) : Mu.computational_arg * Cn.Locations.info) : unit Producer.t =
@@ -183,58 +181,57 @@ let produce_arguments (args : Mu.arguments) :
   let+ ((), subst), state = producer Subst.empty State.empty in
   (subst, state)
 
-let produce_return_type (ret_ty : Mu.return_type) : unit Producer.t =
-  let open Producer.With_syntax in
-  let@ () = with_loc ~loc:(fst ret_ty.ret_info) in
-  [%l.trace "@[Producing post condition:@ %a@]" Mu.pp_return_type ret_ty];
-  let rsym, bty = ret_ty.ret in
-  let*^ r = Core_value.nondet_bt bty in
-  let* () = Subst.add rsym r in
-  Producer.iter_list ret_ty.logic ~f:produce_logical_arg
+(** Toplevel function made to be used in the interpreter *)
+let produce_return_type ~subst (ret_ty : Mu.return_type) :
+    (Subst.t, _, _) State.SM.Result.t =
+  let producer =
+    let open Producer.With_syntax in
+    let@ () = with_loc ~loc:(fst ret_ty.ret_info) in
+    [%l.trace "@[Producing post condition:@ %a@]" Mu.pp_return_type ret_ty];
+    let rsym, bty = ret_ty.ret in
+    let*^ r = Core_value.nondet_bt bty in
+    let* () = Subst.add rsym r in
+    Producer.iter_list ret_ty.logic ~f:produce_logical_arg
+  in
+  let open State.SM.Syntax in
+  let+ (), subst = Producer.run_with_subst ~subst producer in
+  Compo_res.Ok subst
 
-let consume_pure (subst, state) (annot : annot) =
+let consume_pure (annot : annot) : unit Consumer.t =
+  let open Consumer.With_syntax in
   let (IT (_, _, loc)) = annot in
-  let@@ () = Csymex.with_loc ~loc in
-  let* v = Subst.eval_annot subst annot in
-  let* v =
+  let@ () = Consumer.with_loc ~loc in
+  let* v = Subst.eval_annot annot in
+  let*^ v =
     Core_value.cast_bool v
     |> of_opt_not_impl ~msg:"consume_annot: not a boolean"
   in
-  let++ () = logic_assert v in
-  (subst, state)
+  logic_assert v
 
-let consume_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
-    ( Subst.t * State.t option,
-      Cn_error.with_trace,
-      State.syn list )
-    Csymex.Result.t =
+let consume_logical_constraint (lc : Cn.LogicalConstraints.t) : unit Consumer.t
+    =
   match lc with
-  | T it -> consume_pure (subst, state) it
-  | Forall _ -> not_impl "consume_logical_constraint: Forall"
+  | T it -> consume_pure it
+  | Forall _ -> Consumer.not_impl "consume_logical_constraint: Forall"
 
-let consume_owned_pred cty (kind : Mu.Request.init) ptr subst state =
-  let* ptr = Subst.eval_annot subst ptr in
-  let* ptr =
+let consume_owned_pred cty (kind : Mu.Request.init) ptr :
+    Core_value.t Consumer.t =
+  let open Consumer.With_syntax in
+  let* ptr = Subst.eval_annot ptr in
+  let*^ ptr =
     Core_value.cast_ptr ptr
     |> of_opt_not_impl ~msg:"consume_p_resource: not a pointer"
   in
-  [%l.trace
-    "@[Consuming Owned %a at %a@.@[with state:@ %a@]@]" pp_okind kind Typed.ppa
-      ptr
-      (Fmt.Dump.option @@ State.pp_pretty ~ignore_freed:true)
-      state];
-  let++ v, state =
-    match kind with
-    | Init ->
-        State.SM.Result.run_with_state ~state (State.consume_owned ptr cty)
-    | Uninit ->
-        State.SM.Result.run_with_state ~state (State.consume_any ptr cty)
-  in
-  (v, (subst, state))
+  [%l.trace "@[Consuming Owned %a at %a@]" pp_okind kind Typed.ppa ptr];
+  match kind with
+  | Init -> lift_state @@ State.consume_owned ptr cty
+  | Uninit -> lift_state @@ State.consume_any ptr cty
 
-let rec find_clause_consume (subst, state) (clauses : Mu.clause list) :
-    (Core_value.t * State.t option, _, _) Result.t =
-  let* loc = Csymex.get_loc () in
+let rec find_clause_consume ~subst (clauses : Mu.clause list) :
+    (Core_value.t, _, _) State.SM.Result.t =
+  let open State.SM in
+  let open State.SM.Syntax in
+  let*^ loc = Csymex.get_loc () in
   match clauses with
   | [] ->
       let trace =
@@ -242,8 +239,8 @@ let rec find_clause_consume (subst, state) (clauses : Mu.clause list) :
       in
       Result.error ((`Lfail Typed.v_false :> Cn_error.t), trace)
   | clause :: rest ->
-      let* guard = Subst.eval_annot subst clause.guard in
-      let* guard =
+      let*^ guard = Subst.eval_annot subst clause.guard in
+      let*^ guard =
         Core_value.cast_bool guard
         |> of_opt_not_impl ~msg:"clause guard isn't a boolean?"
       in
@@ -251,37 +248,32 @@ let rec find_clause_consume (subst, state) (clauses : Mu.clause list) :
         let logical_args =
           List.map (fun arg -> (arg, (clause.loc, None))) clause.logical_args
         in
-        let** subst, state =
-          Result.fold_list ~init:(subst, state) ~f:consume_logical_arg
-            logical_args
+        let** (), subst =
+          Consumer_monad.run_with_subst ~subst
+            (Consumer_monad.iter_list ~f:consume_logical_arg logical_args)
         in
-        let+ ret = Subst.eval_annot subst clause.ret in
-        Compo_res.Ok (ret, state)
-      else find_clause_consume (subst, state) rest
+        let*^ ret = Subst.eval_annot subst clause.ret in
+        Result.ok ret
+      else find_clause_consume ~subst rest
 
-and consume_pred_def ~name state (def : Mu.predicate_def)
-    (iargs : Core_value.t list) =
+and consume_pred_def ~name (def : Mu.predicate_def) (iargs : Core_value.t list)
+    : (Core_value.t, _, _) State.SM.Result.t =
+  let open State.SM.Syntax in
   [%l.trace "Consuming the definition of %a" Sym.pp name];
-  let@@ () = Csymex.with_loc ~loc:def.loc in
   let subst = subst_for_pred_def def iargs in
-  let* clauses =
+  let*^ clauses =
     of_opt_not_impl ~msg:"consume_pred_def: no clauses" def.clauses
   in
   (* We consume at most one case if we are guaranteed it matches *)
-  find_clause_consume (subst, state) clauses
+  find_clause_consume ~subst clauses
 
-and consume_predicate (subst, state) ~lift_error sym iargs :
-    (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
-  let* (iargs : Core_value.t list) =
-    map_list ~f:(Subst.eval_annot subst) iargs
-  in
+and consume_predicate sym iargs : (Core_value.t, _, _) State.SM.Result.t =
+  let open State.SM in
+  let open Syntax in
   let* first_res =
-    let** vs, state =
-      State.SM.Result.run_with_state ~state (State.consume_pred sym iargs)
-      |> lift_error
-    in
+    let** vs = State.consume_pred sym iargs in
     (* Cn predicates have a unique out-parameter *)
-    Result.ok (List.hd vs, (subst, state))
+    Result.ok (List.hd vs)
   in
   (* If we failed to consume the predicate, we try to fold it instead *)
   match first_res with
@@ -289,71 +281,54 @@ and consume_predicate (subst, state) ~lift_error sym iargs :
   | Error _ | Missing _ -> (
       [%l.trace "Auto-fold attempt for %a" Sym.pp sym];
       let def = Ctx.get_pred_def sym in
-      let+ snd_res = consume_pred_def ~name:sym state def iargs in
+      let+ snd_res = consume_pred_def ~name:sym def iargs in
       match snd_res with
-      | Compo_res.Ok (v, state) -> Compo_res.Ok (v, (subst, state))
+      | Compo_res.Ok v ->
+          [%l.debug "Successfully auto-folded %a" Sym.pp sym];
+          Compo_res.Ok v
       | Error _ | Missing _ ->
           (* Otherwise, we give the error of the first attempt *)
           first_res)
 
-and consume_resource (subst, state) (req : Mu.Request.t) :
-    (Core_value.t * (Subst.t * State.t option), _, _) Csymex.Result.t =
-  let* loc = Csymex.get_loc () in
-  let mk_trace msg = Soteria.Terminal.Call_trace.singleton ~loc ~msg () in
-  let lift_error x =
-    Csymex.map
-      (function
-        | Compo_res.Ok x -> Compo_res.Ok x
-        | Error (e, _st) ->
-            let trace = mk_trace "Could not consume resource" in
-            Error (e, trace)
-        | Missing _ ->
-            let trace =
-              mk_trace "Missing resource (could be hidden under a predicate?)"
-            in
-            Error (`Missing_resource, trace))
-      x
-  in
+and consume_resource (req : Mu.Request.t) : Core_value.t Consumer.t =
+  let open Consumer.With_syntax in
   match req with
-  | Owned { ty = cty; kind; ptr } ->
-      consume_owned_pred cty kind ptr subst state |> lift_error
-  | P { name; iargs } -> consume_predicate (subst, state) ~lift_error name iargs
-  | Q _ -> not_impl "consume_resource: Q"
+  | Owned { ty = cty; kind; ptr } -> consume_owned_pred cty kind ptr
+  | P { name; iargs } ->
+      let* (iargs : Core_value.t list) = map_list ~f:Subst.eval_annot iargs in
+      lift_state @@ consume_predicate name iargs
+  | Q _ -> Consumer.not_impl "consume_resource: Q"
 
-and consume_logical_arg (subst, state)
-    ((arg, (loc, _)) : Mu.logical_arg * Cn.Locations.info) :
-    ( Subst.t * State.t option,
-      Cn_error.with_trace,
-      State.syn list )
-    Csymex.Result.t =
-  let@@ () = Csymex.with_loc ~loc in
+and consume_logical_arg ((arg, (loc, _)) : Mu.logical_arg * Cn.Locations.info) :
+    unit Consumer.t =
+  let open Consumer.With_syntax in
+  let@ () = Consumer.with_loc ~loc in
   match arg with
   | Define (sym, annot) ->
-      let+ v = Subst.eval_annot subst annot in
-      let subst = Subst.add sym v subst in
-      Compo_res.Ok (subst, state)
+      let* v = Subst.eval_annot annot in
+      Subst.add sym v
   | Resource (sym, (req, _ty)) ->
-      let++ v, (subst, state) = consume_resource (subst, state) req in
-      let subst = Subst.add sym v subst in
-      (subst, state)
-  | Constraint lc -> consume_logical_constraint (subst, state) lc
+      let* v = consume_resource req in
+      Subst.add sym v
+  | Constraint lc -> consume_logical_constraint lc
 
-let consume_arguments (args : Mu.arguments) subst state :
-    ( Subst.t * State.t option,
-      Cn_error.with_trace,
-      State.syn list )
-    Csymex.Result.t =
-  let open Csymex.Result in
+let consume_arguments (args : Mu.arguments) : unit Consumer.t =
   (* I'm assuming the type Cn base type checker already went through code,
 in which case there's nothing else to do about computational args. *)
-  fold_list ~init:(subst, state) ~f:consume_logical_arg args.logic
+  Consumer.iter_list ~f:consume_logical_arg args.logic
 
-let consume_return_type ~subst (ty : Mu.return_type) (ret : Core_value.t) state
-    : (unit, Cn_error.with_trace, State.syn list) State.SM.Result.t =
+let consume_return_type ~subst (ty : Mu.return_type) (ret : Core_value.t) :
+    (unit, Cn_error.with_trace, State.syn list) State.SM.Result.t =
+  let open State.SM.Syntax in
+  let* state = State.SM.get_state () in
   [%l.debug
     "@[<v 2>Consuming return type: %a@]@.@[<v 2>with state:@ %a@]"
       Mu.pp_return_type ty
       (Fmt.option @@ State.pp_pretty ~ignore_freed:true)
       state];
   let subst = Subst.add (fst ty.ret) ret subst in
-  Result.fold_list ~init:(subst, state) ~f:consume_logical_arg ty.logic
+  let++ v, _subst =
+    Consumer.run_with_subst ~subst
+      (Consumer.iter_list ~f:consume_logical_arg ty.logic)
+  in
+  v

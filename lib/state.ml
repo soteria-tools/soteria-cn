@@ -84,9 +84,32 @@ let produce_any' loc ofs len = lift_produce (SState.produce_any' loc ofs len)
 let produce_uninit' loc ofs len =
   lift_produce (SState.produce_uninit' loc ofs len)
 
-let consume_owned ptr ty = with_base (SState.consume_owned ptr ty)
-let consume_any ptr ty = with_base (SState.consume_any ptr ty)
-let consume_uninit ptr ty = with_base (SState.consume_uninit ptr ty)
+let lift_consumer_error (m : ('a, [< Cn_error.t ], 's) SM.Result.t) :
+    ('a, Cn_error.with_trace, 's) SM.Result.t =
+  let open SM.Syntax in
+  let*^ loc = Csymex.get_loc () in
+  let mk_trace msg = Soteria.Terminal.Call_trace.singleton ~loc ~msg () in
+  let+ res = m in
+  match res with
+  | Compo_res.Ok x -> Compo_res.Ok x
+  | Error e ->
+      let trace = mk_trace "Could not consume resource" in
+      Error (e, trace)
+  | Missing _ ->
+      let trace =
+        mk_trace "Missing resource (could be hidden under a predicate?)"
+      in
+      Error (`Missing_resource, trace)
+
+let consume_owned ptr ty =
+  lift_consumer_error @@ with_base (SState.consume_owned ptr ty)
+
+let consume_any ptr ty =
+  lift_consumer_error @@ with_base (SState.consume_any ptr ty)
+
+let consume_uninit ptr ty =
+  lift_consumer_error @@ with_base (SState.consume_uninit ptr ty)
+
 let alloc_ty ty = with_base (SState.alloc_ty ty)
 let alloc size = with_base (SState.alloc size)
 let store ptr ty v = with_base (SState.store ptr ty v)

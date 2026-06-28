@@ -6,7 +6,7 @@ type t =
 
 type with_trace = t * Cerb_location.t Soteria.Terminal.Call_trace.t
 
-let error_with_loc ?(msg = "Triggering operation") (err : t) =
+let error_with_loc ?(msg = "Triggering operation") (err : [< t ]) =
   let open Csymex.Syntax in
   let* loc = Csymex.get_loc () in
   let err = (err, Soteria.Terminal.Call_trace.singleton ~loc ~msg ()) in

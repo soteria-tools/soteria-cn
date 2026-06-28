@@ -105,18 +105,18 @@ let eval_ctor (ctor : CF.Core.ctor) (vs : Core_value.t list) :
 let exec_spec ~subst (arguments : arguments) (return_type : return_type) :
     Core_value.t InterpM.t =
   let open Cn_assert in
-  let* state = get_state () in
+  let* state =
+    (* We only retrieve this for debugging *)
+    get_state ()
+  in
   [%l.debug
     "@[<v 2>About to execute specification with state: %a@]@.@[<v 2>Subst:@ \
      %a@]"
       (Fmt.Dump.option @@ SState.pp_pretty ~ignore_freed:true)
       state Subst.pp subst];
-  let* subst, state =
-    InterpM.lift_symex_res @@ consume_arguments arguments subst state
-  in
-  let*^ ((), subst), state = produce_return_type return_type subst state in
+  let* (), subst = consume_arguments arguments subst in
+  let+ subst = produce_return_type ~subst return_type in
   let v = Subst.find (fst return_type.ret) subst in
-  let+ () = set_state state in
   v
 
 let eval_iop ~(wrapping : bool) (iop : CF.Core.iop) (lhs : Typed.(T.sint t))
