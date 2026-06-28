@@ -38,29 +38,37 @@ module Request = struct
   let pp_sct = pprint Sctypes.pp
 
   type init = Init | Uninit
-  type name = Owned of Sctypes.t * init | PName of Sym.t
 
   module Predicate = struct
-    type t = { name : name; iargs : IndexTerms.t list }
-    (** [iargs] leads with the pointer the request is about. *)
+    type t = { name : Sym.t; iargs : IndexTerms.t list }
+    (** A user-defined predicate request; [iargs] leads with the pointer. *)
   end
 
   (* Quantified ("each") requests aren't reworked yet: kept as CN's own type. *)
   module QPredicate = Cn.Request.QPredicate
 
-  type t = P of Predicate.t | Q of QPredicate.t
+  (* [Owned] points-to resources are their own request kind, with the pointer
+     and pointee type explicit, rather than an [Owned] resource name whose
+     pointer is smuggled in as a lone argument. *)
+  type t =
+    | Owned of { ty : Sctypes.t; kind : init; ptr : IndexTerms.t }
+    | P of Predicate.t
+    | Q of QPredicate.t
 
-  let pp_name ?(no_nums = false) ft = function
-    | Owned (ct, Init) -> Fmt.pf ft "RW<%a>" pp_sct ct
-    | Owned (ct, Uninit) -> Fmt.pf ft "W<%a>" pp_sct ct
-    | PName pn -> (if no_nums then Sym.pp_sym_hum else Sym.pp) ft pn
+  let pp_kind ft = function
+    | Init -> Fmt.string ft "RW"
+    | Uninit -> Fmt.string ft "W"
 
-  let pp_predicate ?no_nums ft (p : Predicate.t) =
-    Fmt.pf ft "@[<2>%a(%a)@]" (pp_name ?no_nums) p.name
+  let pp_psym ~no_nums = if no_nums then Sym.pp_sym_hum else Sym.pp
+
+  let pp_predicate ?(no_nums = false) ft (p : Predicate.t) =
+    Fmt.pf ft "@[<2>%a(%a)@]" (pp_psym ~no_nums) p.name
       Fmt.(list ~sep:comma pp_it)
       p.iargs
 
   let pp ?no_nums ft = function
+    | Owned { ty; kind; ptr } ->
+        Fmt.pf ft "@[<2>%a<%a>(%a)@]" pp_kind kind pp_sct ty pp_it ptr
     | P p -> pp_predicate ?no_nums ft p
     | Q q -> pprint (fun q -> Cn.Request.pp_aux (Cn.Request.Q q) None) ft q
 end
@@ -226,12 +234,14 @@ type cn_load = {
     [Cnprog.Let]. *)
 
 type predicate_or_predicate_name =
-  | Predicate of Request.Predicate.t
-  | PredicateName of Request.name
+  | Predicate of Request.t
+  | PredicateName of Sym.t
+      (** Only user predicates can be named: pack/unpack of an [Owned] resource
+          is not a valid program. *)
 
 type cn_statement =
   | Pack_unpack of CF.Cn.pack_unpack * predicate_or_predicate_name
-  | To_from_bytes of CF.Cn.to_from * Request.Predicate.t
+  | To_from_bytes of CF.Cn.to_from * Request.t
   | Have of LogicalConstraints.t
   | Instantiate of (Sym.t, Sctypes.t) CF.Cn.cn_to_instantiate * IndexTerms.t
   | Split_case of LogicalConstraints.t
@@ -711,12 +721,11 @@ let pp_to_extract ft = function
   | CF.Cn.E_Everything -> Fmt.string ft "everything"
   | CF.Cn.E_Pred _ -> Fmt.string ft "pred"
 
-let pp_pred ft (p : Request.Predicate.t) =
-  Request.pp_predicate ~no_nums:true ft p
+let pp_pred ft (p : Request.t) = Request.pp ~no_nums:true ft p
 
 let pp_pred_or_name ft = function
   | Predicate p -> pp_pred ft p
-  | PredicateName n -> Request.pp_name ~no_nums:true ft n
+  | PredicateName n -> Sym.pp_sym_hum ft n
 
 let pp_cn_statement ft = function
   | Pack_unpack (pu, p) ->
@@ -1035,29 +1044,42 @@ module Of_mucore = struct
   let paction (Mu.Paction (polarity, Mu.Action (loc, a_))) : action =
     { loc; polarity; action = action_ a_ }
 
-  (* [Cn.Request] → our {!Request}: the only reshaping is folding a predicate's
-     pointer into the head of [iargs]; quantified requests pass through. *)
-  let request_name : Cn.Request.name -> Request.name = function
-    | Owned (ct, Init) -> Owned (ct, Init)
-    | Owned (ct, Uninit) -> Owned (ct, Uninit)
-    | PName s -> PName s
+  (* [Cn.Request] → our {!Request}. CN keeps [Owned] as a resource [name] whose
+     pointer is a lone argument; we hoist [Owned] to its own request kind (which
+     carries no iargs), and fold a user predicate's pointer into the head of its
+     [iargs]. Quantified requests pass through. *)
+  let request_init : Cn.Request.init -> Request.init = function
+    | Init -> Init
+    | Uninit -> Uninit
 
-  let request_predicate (p : Cn.Request.Predicate.t) : Request.Predicate.t =
-    { name = request_name p.name; iargs = p.pointer :: p.iargs }
+  let request_predicate (p : Cn.Request.Predicate.t) : Request.t =
+    match p.name with
+    | Owned (ty, init) ->
+        if not (List.is_empty p.iargs) then
+          failwith "Of_mucore.request: Owned resource with input arguments";
+        Owned { ty; kind = request_init init; ptr = p.pointer }
+    | PName name -> P { name; iargs = p.pointer :: p.iargs }
 
   let request : Cn.Request.t -> Request.t = function
-    | P p -> P (request_predicate p)
+    | P p -> request_predicate p
     | Q q -> Q q
 
   let request_resource ((req, bt) : Cn.Request.t * BaseTypes.t) :
       Request.t * BaseTypes.t =
     (request req, bt)
 
+  (* pack/unpack only applies to user predicates; an [Owned] resource here — in
+     either form — is an invalid program. *)
   let predicate_or_predicate_name :
       Cnstatement.predicate_or_predicate_name -> predicate_or_predicate_name =
+    let invalid () =
+      failwith "Of_mucore: pack/unpack of an Owned resource is not valid"
+    in
     function
-    | Cnstatement.Predicate p -> Predicate (request_predicate p)
-    | Cnstatement.PredicateName n -> PredicateName (request_name n)
+    | Cnstatement.Predicate p -> (
+        match request_predicate p with Owned _ -> invalid () | req -> Predicate req)
+    | Cnstatement.PredicateName (PName s) -> PredicateName s
+    | Cnstatement.PredicateName (Owned _) -> invalid ()
 
   let cn_statement : Cnstatement.statement -> cn_statement = function
     | Cnstatement.Pack_unpack (pu, p) ->
