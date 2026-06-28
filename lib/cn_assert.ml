@@ -99,7 +99,7 @@ and produce_clause (clause : Mu.clause) =
 and produce_pred_def ~name (def : Mu.predicate_def) (iargs : Core_value.t list)
     : Core_value.t State.SM.t =
   let open State.SM.Syntax in
-  [%l.trace "Producing the definition of %a" Sym.pp name];
+  [%l.trace "Producing the definition of %a" Sym.pp_hum name];
   let+ v, _ =
     Producer.run_with_subst
       ~subst:(subst_for_pred_def def iargs)
@@ -259,7 +259,7 @@ let rec find_clause_consume ~subst (clauses : Mu.clause list) :
 and consume_pred_def ~name (def : Mu.predicate_def) (iargs : Core_value.t list)
     : (Core_value.t, _, _) State.SM.Result.t =
   let open State.SM.Syntax in
-  [%l.trace "Consuming the definition of %a" Sym.pp name];
+  [%l.trace "Consuming the definition of %a" Sym.pp_hum name];
   let subst = subst_for_pred_def def iargs in
   let*^ clauses =
     of_opt_not_impl ~msg:"consume_pred_def: no clauses" def.clauses
@@ -279,12 +279,12 @@ and consume_predicate sym iargs : (Core_value.t, _, _) State.SM.Result.t =
   match first_res with
   | Ok _ -> return first_res
   | Error _ | Missing _ -> (
-      [%l.trace "Auto-fold attempt for %a" Sym.pp sym];
+      [%l.trace "Auto-fold attempt for %a" Sym.pp_hum sym];
       let def = Ctx.get_pred_def sym in
       let+ snd_res = consume_pred_def ~name:sym def iargs in
       match snd_res with
       | Compo_res.Ok v ->
-          [%l.debug "Successfully auto-folded %a" Sym.pp sym];
+          [%l.debug "Successfully auto-folded %a" Sym.pp_hum sym];
           Compo_res.Ok v
       | Error _ | Missing _ ->
           (* Otherwise, we give the error of the first attempt *)

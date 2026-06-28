@@ -73,36 +73,13 @@ let assert_or_error (b : Typed.(T.sbool t)) err : unit t =
 module State = struct
   open Syntax
 
-  let with_miss_as_error :
-      'a.
-      ('a, Error.with_trace, SState.syn list) Result.t ->
-      ('a, Cn_error.with_trace, SState.syn list) Result.t =
-   fun m ->
-    let*^ loc = Csymex.get_loc () in
-    let trace =
-      Soteria.Terminal.Call_trace.singleton ~loc
-        ~msg:
-          "Memory operation requires additional resource (it may be hidden in \
-           predicates?)"
-        ()
-    in
-    SState.SM.map
-      (function
-        | Compo_res.Ok r -> Compo_res.Ok r
-        | Error (e, tr) -> Error ((e :> Cn_error.t), tr)
-        | Missing _ -> Error (`Missing_resource, trace))
-      m
-
-  let alloc_ty ty =
-    with_miss_as_error @@ SState.alloc_ty (Cn.Sctypes.to_ctype ty)
+  let alloc_ty ty = SState.alloc_ty (Cn.Sctypes.to_ctype ty)
 
   let alloc size =
-    let@@ () = with_miss_as_error in
     let* size = CV.cast_int size in
     SState.alloc size
 
   let store ptr ty v =
-    let@@ () = with_miss_as_error in
     let relevant_values =
      fun f ->
       f ptr;
@@ -115,7 +92,6 @@ module State = struct
       (SState.store ptr ty v)
 
   let load ptr ty =
-    let@@ () = with_miss_as_error in
     let relevant_values = Iter.singleton ptr in
     let* ptr = CV.cast_ptr ptr in
     let ty = Cn.Sctypes.to_ctype ty in
@@ -126,7 +102,6 @@ module State = struct
     Core_value.of_agv ~ty v
 
   let free ptr =
-    let@@ () = with_miss_as_error in
     let relevant_values = Iter.singleton ptr in
     let* ptr = CV.cast_ptr ptr in
     Cn_assert.with_recovery_attempt ~values:relevant_values (SState.free ptr)

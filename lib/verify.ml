@@ -31,12 +31,18 @@ let verif_process ~loc (args : Mu.arguments) return_type labels body =
     State.SM.Result.run_with_state ~state
     @@ Minterp.eval_expr ~labels subst body
     |> Result.map_error (fun ((err, tr), _) -> ((err :> Cn_error.t), tr))
+    |> Result.map_missing (fun x ->
+        [%l.error "Missing resource during function execution"];
+        x)
   in
   let ret = Minterp.ExprM.returned_value result in
   let** (), state =
     State.SM.Result.run_with_state ~state
       (Cn_assert.consume_return_type ~subst return_type ret)
     |> Result.map_error (fun ((err, tr), _) -> ((err :> Cn_error.t), tr))
+    |> Result.map_missing (fun x ->
+        [%l.error "Missing resource during postcondition consumption"];
+        x)
   in
   let fn_call_trace elements =
     elements
@@ -128,7 +134,7 @@ let verify_prog ~fuel ?only (prog : Mu.file) : (unit, string) Result.t =
       else
         match decl with
         | Proc { trusted = Checked; args; return_type; body; labels; loc } ->
-            Fmt.pr "Verifying function %a...\n" Sym.pp_sym_hum name;
+            Fmt.pr "Verifying function %a...\n" Sym.pp_hum name;
             let name_str = name_of name in
             let has_bugs = ref false in
             verify_fn ~fuel ~loc name args return_type labels body
@@ -137,10 +143,10 @@ let verify_prog ~fuel ?only (prog : Mu.file) : (unit, string) Result.t =
                 if not (Compo_res.is_ok r) then has_bugs := true);
             if not !has_bugs then
               Fmt.pr "%a\n" Soteria.Logs.Printers.pp_ok
-                (Fmt.str "Successfully verified %a" Sym.pp_sym_hum name)
+                (Fmt.str "Successfully verified %a" Sym.pp_hum name)
         | Proc { trusted = Trusted loc; _ } ->
             L.info (fun m ->
-                m "Skipping trusted function %a (%a)" Sym.pp name pp_loc loc)
+                m "Skipping trusted function %a (%a)" Sym.pp_hum name pp_loc loc)
         | ProcDecl _ -> ())
     prog.funs;
   Ok ()

@@ -59,7 +59,7 @@ module Request = struct
     | Init -> Fmt.string ft "RW"
     | Uninit -> Fmt.string ft "W"
 
-  let pp_psym ~no_nums = if no_nums then Sym.pp_sym_hum else Sym.pp
+  let pp_psym ~no_nums = if no_nums then Sym.pp else Sym.pp_hum
 
   let pp_predicate ?(no_nums = false) ft (p : Predicate.t) =
     Fmt.pf ft "@[<2>%a(%a)@]" (pp_psym ~no_nums) p.name
@@ -441,7 +441,7 @@ let empty_file : file =
 
 (* Bridge from Cerberus' PPrint-based printers to [Fmt.t]. *)
 let pp_pp pp ft x = Fmt.string ft (Cn.Pp.plain (pp x))
-let pp_sym = Sym.pp
+let pp_sym = Sym.pp_hum
 let pp_id = pp_pp Id.pp
 let pp_loc = pp_pp Locations.pp
 let pp_it = pp_pp IndexTerms.pp
@@ -725,7 +725,7 @@ let pp_pred ft (p : Request.t) = Request.pp ~no_nums:true ft p
 
 let pp_pred_or_name ft = function
   | Predicate p -> pp_pred ft p
-  | PredicateName n -> Sym.pp_sym_hum ft n
+  | PredicateName n -> Sym.pp_hum ft n
 
 let pp_cn_statement ft = function
   | Pack_unpack (pu, p) ->
@@ -1077,7 +1077,9 @@ module Of_mucore = struct
     in
     function
     | Cnstatement.Predicate p -> (
-        match request_predicate p with Owned _ -> invalid () | req -> Predicate req)
+        match request_predicate p with
+        | Owned _ -> invalid ()
+        | req -> Predicate req)
     | Cnstatement.PredicateName (PName s) -> PredicateName s
     | Cnstatement.PredicateName (Owned _) -> invalid ()
 

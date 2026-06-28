@@ -53,8 +53,34 @@ module SState = struct
     List.sort_uniq Stdlib.compare result
 end
 
-module PState = Predicates.With_preds (Symbol_std) (Core_value) (State)
+module PState =
+  Predicates.With_preds
+    (struct
+      include Symbol_std
+
+      let pp = pp_hum
+    end)
+    (Core_value)
+    (State)
+
 include PState
+
+let with_miss_as_error (m : (_, _, _) SM.Result.t) =
+  let open SM.Syntax in
+  let* res = m in
+  match res with
+  | Compo_res.Ok x -> SM.return (Compo_res.Ok x)
+  | Error e -> SM.return (Compo_res.Error e)
+  | Missing _ ->
+      let*^ loc = Csymex.get_loc () in
+      let trace =
+        Soteria.Terminal.Call_trace.singleton ~loc
+          ~msg:
+            "Memory operation requires additional resource (it may be hidden \
+             in predicates?)"
+          ()
+      in
+      SM.return (Compo_res.Error (`Missing_resource, trace))
 
 let lift_produce (f : SState.t option -> SState.t option Csymex.t) :
     t option -> t option Csymex.t =
@@ -110,11 +136,12 @@ let consume_any ptr ty =
 let consume_uninit ptr ty =
   lift_consumer_error @@ with_base (SState.consume_uninit ptr ty)
 
-let alloc_ty ty = with_base (SState.alloc_ty ty)
-let alloc size = with_base (SState.alloc size)
-let store ptr ty v = with_base (SState.store ptr ty v)
-let load ptr ty = with_base (SState.load ptr ty)
-let free ptr = with_base (SState.free ptr)
+let consume_pred name ins = lift_consumer_error @@ PState.consume_pred name ins
+let alloc_ty ty = with_miss_as_error @@ with_base (SState.alloc_ty ty)
+let alloc size = with_miss_as_error @@ with_base (SState.alloc size)
+let store ptr ty v = with_miss_as_error @@ with_base (SState.store ptr ty v)
+let load ptr ty = with_miss_as_error @@ with_base (SState.load ptr ty)
+let free ptr = with_miss_as_error @@ with_base (SState.free ptr)
 
 let leaks state =
   let { base; preds } = of_opt state in

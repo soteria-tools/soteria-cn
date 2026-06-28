@@ -243,7 +243,7 @@ and eval_call ~loc (sym : Sym.t) (args : Core_value.t list) :
         @ malloc_failure_case ())
   | sym, args -> (
       match Sym.Map.find_opt sym (Ctx.get_prog ()).funs with
-      | None -> not_impl "Couldn't resolve function: %a" Sym.pp sym
+      | None -> not_impl "Couldn't resolve function: %a" Sym.pp_hum sym
       | Some fn ->
           with_extra_call_trace ~loc ~msg:"Called from here" @@ exec_fun fn args
       )
@@ -365,13 +365,13 @@ and eval_expr ~(labels : label_def Sym.Map.t) (subst : Subst.t) (body : expr) :
       let+ r = eval_pexpr subst e in
       ExprM.Normal r
   | Erun (lab, pes) -> (
-      [%l.trace "Running label: %a" Sym.pp lab];
+      [%l.trace "Running label: %a" Sym.pp_hum lab];
       let* vs = map_list ~f:(eval_pexpr subst) pes in
       match (Sym.Map.find lab labels, vs) with
       | Return _, [ v ] -> ExprM.returned v
       | Return _, _ ->
-          not_impl "Return label with multiple values: %a" Sym.pp lab
-      | Non_inlined _, _ -> not_impl "Non-inlined label: %a" Sym.pp lab
+          not_impl "Return label with multiple values: %a" Sym.pp_hum lab
+      | Non_inlined _, _ -> not_impl "Non-inlined label: %a" Sym.pp_hum lab
       | Loop { loc = _; args = _; body; annots = _; info = _ }, _vs ->
           (* TODO: loop invariants etvc *)
           eval_expr ~labels subst body)

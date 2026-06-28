@@ -43,8 +43,8 @@ let rec pp_obj ft (o : obj) =
   | Ptr p -> Typed.ppa ft p
   | Array elems -> Fmt.pf ft "@[<hov 2>[%a]@]" pp_members elems
   | Struct { tag; members } ->
-      Fmt.pf ft "@[<hov 2>%a {%a}@]" Sym.pp tag pp_members members
-  | Fn sym -> Fmt.pf ft "&%a" Sym.pp sym
+      Fmt.pf ft "@[<hov 2>%a {%a}@]" Sym.pp_hum tag pp_members members
+  | Fn sym -> Fmt.pf ft "&%a" Sym.pp_hum sym
 
 let rec pp ft (v : t) =
   match v with
@@ -169,7 +169,8 @@ let rec nondet_bt (bt : Cn.BaseTypes.t) : t Csymex.t =
         match Symbol_std.Map.find sym prog.tag_defs with
         | StructDef layout -> layout
         | _ ->
-            L.failwith "nondet_bt: expected struct definition for %a" Sym.pp sym
+            L.failwith "nondet_bt: expected struct definition for %a" Sym.pp_hum
+              sym
       in
       let+ values =
         Csymex.map_list
@@ -213,7 +214,7 @@ let struct_field (v : t) (memb : Cerb_frontend.Symbol.identifier) :
       when Cerb_frontend.Symbol.idEqual memb id ->
         Some member
     | _ :: rest_def, _ :: rest_members -> find rest_def rest_members
-    | _ -> L.failwith "Invalid structure definition for %a" Sym.pp tag
+    | _ -> L.failwith "Invalid structure definition for %a" Sym.pp_hum tag
   in
   find struct_def members
 
