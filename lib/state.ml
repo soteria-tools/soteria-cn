@@ -71,6 +71,13 @@ let pp_pretty ~ignore_freed ft { base; preds } =
     (Fmt.option @@ Uninterpreted.pp)
     preds
 
+(* HACK: until I make the signature of consumers and producers prettier in Soteria *)
+let lift_produce (f : SState.t option -> SState.t option Csymex.t) : unit SM.t =
+  let open Csymex.Syntax in
+  fun st ->
+    let+ st = lift_produce f st in
+    ((), st)
+
 let produce_owned ptr cty v = lift_produce (SState.produce_owned ptr cty v)
 let produce_any' loc ofs len = lift_produce (SState.produce_any' loc ofs len)
 

@@ -140,7 +140,7 @@ module M (Symex : Symex.Base) = struct
       let open Symex.Syntax in
       let { preds; base } = of_opt state in
       let+ preds = Uninterpreted.produce' name ins outs preds in
-      to_opt { preds; base }
+      ((), to_opt { preds; base })
 
     let consume_pred name ins = with_preds (Uninterpreted.consume' name ins)
 
@@ -158,7 +158,7 @@ module M (Symex : Symex.Base) = struct
             "Heuristics is unfolding predicate %a" Uninterpreted.pp_pred p];
           let name, ins, outs = p in
           let state = to_opt { preds; base } in
-          let*^ state = produce_def name ins outs state in
+          let*^ (), state = produce_def name ins outs state in
           let+ () = set_state state in
           true
 

@@ -8,6 +8,57 @@ open Csymex
 open Syntax
 open Soteria_c_helpers
 
+module Producer = struct
+  module A =
+    Monad.StateT_base
+      (struct
+        type t = Subst.t
+      end)
+      (State.SM)
+
+  include A
+  include Monad.Extend (A)
+
+  let lift_state s = lift s
+  let lift s = lift (State.SM.lift s)
+
+  let run_with_subst ~subst (f : 'a t) : ('a * Subst.t) State.SM.t =
+    run_with_state ~state:subst f
+
+  (* State.SM.branches : (unit -> 'a SM.t) list -> 'a SM.t *)
+  (* (unit -> subst -> ('a * subst) SM.t) list ->
+    subst -> ('a * subst) SM.t *)
+
+  let branches (brs : (unit -> 'a t) list) : 'a t =
+   fun subst -> State.SM.branches (List.map (fun f -> fun () -> f () subst) brs)
+
+  module Subst = struct
+    let eval_annot annot =
+      let open Syntax in
+      let* subst = get_state () in
+      lift @@ Subst.eval_annot subst annot
+
+    let add (sym : Symbol_std.t) (v : Core_value.t) : unit t =
+     fun subst ->
+      let subst = Subst.add sym v subst in
+      State.SM.return ((), subst)
+  end
+
+  let with_loc ~loc (f : unit -> 'a t) : 'a t =
+   fun subst state -> Csymex.with_loc ~loc (f () subst state)
+
+  module Syntax = struct
+    include Syntax
+
+    let ( let*^ ) x f = bind f (lift x)
+  end
+end
+
+module Producer_and_syntax = struct
+  include Producer
+  include Producer.Syntax
+end
+
 type term = Cn.(BaseTypes.t Terms.term)
 type annot = Cn.(BaseTypes.t Terms.annot)
 
@@ -43,31 +94,29 @@ let subst_or_extend ~ty sym subst =
       let subst = Subst.add sym v subst in
       return (v, subst)
 
-let produce_computational_arg (subst, state)
-    ((arg, _loc) : Mu.computational_arg * Cn.Locations.info) :
-    (Subst.t * State.t option) Csymex.t =
+let produce_computational_arg
+    ((arg, loc) : Mu.computational_arg * Cn.Locations.info) : unit Producer.t =
+  let open Producer_and_syntax in
   [%l.trace "Producing computational argument: %a" Mu.pp_computational_arg arg];
+  let@ () = Producer.with_loc ~loc:(fst loc) in
   let (Computational (sym, ty) | Ghost (sym, ty)) = arg in
-  let+ v = Core_value.nondet_bt ty in
-  let subst = Subst.add sym v subst in
-  [%l.trace "New substitution: %a" Subst.pp subst];
-  (subst, state)
+  let*^ v = Core_value.nondet_bt ty in
+  Subst.add sym v
 
-let produce_pure (subst, state) (annot : annot) :
-    (Subst.t * State.t option) Csymex.t =
-  let* v = Subst.eval_annot subst annot in
-  let* v =
+let produce_pure (annot : annot) : unit Producer.t =
+  let open Producer_and_syntax in
+  let* v = Subst.eval_annot annot in
+  let*^ v =
     Core_value.cast_bool v |> of_opt_not_impl ~msg:"produce_pure: not a boolean"
   in
-  let+ () = assume [ v ] in
-  (subst, state)
+  lift @@ assume [ v ]
 
-let rec produce_def_s name ins outs state =
+let rec produce_def_s name ins outs =
+  let open State.SM.Syntax in
   let def = Ctx.get_pred_def name in
-  let* res, state = produce_pred_def ~name state def ins in
+  let* res = produce_pred_def ~name def ins in
   let out = List.hd outs in
-  let+ () = Csymex.assume [ Core_value.sem_eq res out ] in
-  state
+  State.SM.assume [ Core_value.sem_eq res out ]
 
 and unfold_with_heuristics heuristics =
   State.unfold_with_heuristics ~produce_def:produce_def_s heuristics
@@ -77,116 +126,120 @@ and with_recovery_attempt ~values f =
     ~heuristics:(Unfold_heuristics.recovery_heuristics values)
     ~produce_def:produce_def_s f
 
-and produce_logical_constraint (subst, state) (lc : Cn.LogicalConstraints.t) :
-    (Subst.t * State.t option) Csymex.t =
+and produce_logical_constraint (lc : Cn.LogicalConstraints.t) : unit Producer.t
+    =
   match lc with
-  | T it -> produce_pure (subst, state) it
-  | Forall _ -> not_impl "consume_logical_constraint: Forall"
+  | T it -> produce_pure it
+  | Forall _ -> Producer.lift @@ not_impl "consume_logical_constraint: Forall"
 
-and produce_clause (subst, state) (clause : Mu.clause) =
-  let@@ () = Csymex.with_loc ~loc:clause.loc in
-  let* guard = Subst.eval_annot subst clause.guard in
-  let* guard =
+and produce_clause (clause : Mu.clause) =
+  let open Producer_and_syntax in
+  let@ () = with_loc ~loc:clause.loc in
+  let* guard = Subst.eval_annot clause.guard in
+  let*^ guard =
     Core_value.cast_bool guard
     |> of_opt_not_impl ~msg:"clause guard isn't a boolean?"
   in
-  let* () = Csymex.assume [ guard ] in
+  let*^ () = Csymex.assume [ guard ] in
   let logical_args =
     List.map (fun arg -> (arg, (clause.loc, None))) clause.logical_args
   in
-  let* subst, state =
-    fold_list ~init:(subst, state) ~f:produce_logical_arg logical_args
-  in
-  let+ ret = Subst.eval_annot subst clause.ret in
-  (ret, (subst, state))
+  let* () = iter_list ~f:produce_logical_arg logical_args in
+  Subst.eval_annot clause.ret
 
-and produce_pred_def ~name state (def : Mu.predicate_def)
-    (iargs : Core_value.t list) =
+and produce_pred_def ~name (def : Mu.predicate_def) (iargs : Core_value.t list)
+    : Core_value.t State.SM.t =
+  let open State.SM.Syntax in
   [%l.trace "Producing the definition of %a" Symbol_std.pp name];
-  let@@ () = Csymex.with_loc ~loc:def.loc in
-  let subst = subst_for_pred_def def iargs in
-  let* clauses =
-    of_opt_not_impl ~msg:"produce_pred_def: no clauses" def.clauses
+  let+ v, _ =
+    Producer.run_with_subst
+      ~subst:(subst_for_pred_def def iargs)
+      (let open Producer_and_syntax in
+       let@ () = with_loc ~loc:def.loc in
+       let*^ clauses =
+         of_opt_not_impl ~msg:"produce_pred_def: no clauses" def.clauses
+       in
+       branches @@ List.map (fun clause () -> produce_clause clause) clauses)
   in
-  let+ v, (_subst, state) =
-    List.map (fun clause () -> produce_clause (subst, state) clause) clauses
-    |> Csymex.branches
-  in
-  (v, state)
+  v
 
-and produce_owned_resource (subst, state) ~cty ~(kind : Mu.Request.init) ~ptr ty
-    =
-  let* ptr = Subst.eval_annot subst ptr in
-  let* ptr =
+and produce_owned_resource ~cty ~(kind : Mu.Request.init) ~ptr ty =
+  let open Producer_and_syntax in
+  let* ptr = Subst.eval_annot ptr in
+  let*^ ptr =
     Core_value.cast_ptr ptr
     |> of_opt_not_impl ~msg:"produce_resource: not a pointer"
   in
   match kind with
   | Init ->
-      let* v = Core_value.nondet_bt ty in
-      let+ state = State.produce_owned ptr cty v state in
-      (v, (subst, state))
+      let*^ v = Core_value.nondet_bt ty in
+      let+ () = lift_state @@ State.produce_owned ptr cty v in
+      v
   | Uninit ->
       let loc = Typed.Ptr.loc ptr in
       let ofs = Typed.Ptr.ofs ptr in
-      let* len = Layout.size_of_s (Cn.Sctypes.to_ctype cty) in
-      let+ state = State.produce_any' loc ofs len state in
-      (Core_value.Loaded Unspec, (subst, state))
+      let*^ len = Layout.size_of_s (Cn.Sctypes.to_ctype cty) in
+      let+ () = lift_state @@ State.produce_any' loc ofs len in
+      Core_value.Loaded Unspec
 
-and produce_predicate (subst, state) sym iargs =
+and produce_predicate (sym : Symbol_std.t) (iargs : annot list) :
+    Core_value.t Producer.t =
+  let open Producer_and_syntax in
   let def = Ctx.get_pred_def sym in
   let ret_ty = snd def.oarg in
-  let* v = Core_value.nondet_bt ret_ty in
-  let* iargs = map_list ~f:(Subst.eval_annot subst) iargs in
+  let*^ v = Core_value.nondet_bt ret_ty in
+  let* iargs = map_list ~f:Subst.eval_annot iargs in
   (* I think CN never produces non-recursive predicates?
      So let's just unfold them *)
   if def.recursive then
     (* Cn predicates have a unique out-param. *)
-    let+ state = State.produce_pred sym iargs [ v ] state in
-    (v, (subst, state))
+    let+ () = lift_state @@ State.produce_pred sym iargs [ v ] in
+    v
   else
-    let+ v, state = produce_pred_def ~name:sym state def iargs in
-    (v, (subst, state))
+    let+ v = lift_state @@ produce_pred_def ~name:sym def iargs in
+    v
 
-and produce_resource (subst, state) (req : Mu.Request.t) (ty : Cn.BaseTypes.t) :
-    (Core_value.t * (Subst.t * State.t option)) Csymex.t =
+and produce_resource (req : Mu.Request.t) (ty : Cn.BaseTypes.t) :
+    Core_value.t Producer.t =
   match req with
-  | Owned { ty = cty; kind; ptr } ->
-      produce_owned_resource (subst, state) ~cty ~kind ~ptr ty
-  | P { name; iargs } -> produce_predicate (subst, state) name iargs
-  | Q _ -> not_impl "produce_resource: Q"
+  | Owned { ty = cty; kind; ptr } -> produce_owned_resource ~cty ~kind ~ptr ty
+  | P { name; iargs } -> produce_predicate name iargs
+  | Q _ -> Producer.lift @@ not_impl "produce_resource: Q"
 
-and produce_logical_arg (subst, state)
-    ((arg, loc) : Mu.logical_arg * Cn.Locations.info) :
-    (Subst.t * State.t option) Csymex.t =
-  let@@ () = Csymex.with_loc ~loc:(fst loc) in
+and produce_logical_arg ((arg, loc) : Mu.logical_arg * Cn.Locations.info) :
+    unit Producer.t =
+  let open Producer_and_syntax in
+  let@ () = with_loc ~loc:(fst loc) in
   match arg with
   | Define (sym, annot) ->
-      let+ v = Subst.eval_annot subst annot in
-      let subst = Subst.add sym v subst in
-      (subst, state)
+      let* v = Subst.eval_annot annot in
+      Subst.add sym v
   | Resource (sym, (req, ty)) ->
-      let+ v, (subst, state) = produce_resource (subst, state) req ty in
-      let subst = Subst.add sym v subst in
-      (subst, state)
-  | Constraint lc -> produce_logical_constraint (subst, state) lc
+      let* v = produce_resource req ty in
+      Subst.add sym v
+  | Constraint lc -> produce_logical_constraint lc
 
 let produce_arguments (args : Mu.arguments) :
     (Subst.t * State.t option) Csymex.t =
-  let subst = Subst.empty in
-  let state = State.empty in
-  let* subst, state =
-    fold_list ~init:(subst, state) ~f:produce_computational_arg args.comp
+  (* [produce_computational_arg] threads [(subst, state)] over [Csymex] by hand;
+     reshape it into a [Producer.t] (which threads [subst] over [State.SM]). *)
+  let open Csymex.Syntax in
+  let producer =
+    let open Producer_and_syntax in
+    let* () = iter_list ~f:produce_computational_arg args.comp in
+    iter_list ~f:produce_logical_arg args.logic
   in
-  fold_list ~init:(subst, state) ~f:produce_logical_arg args.logic
+  let+ ((), subst), state = producer Subst.empty State.empty in
+  (subst, state)
 
-let produce_return_type (ret_ty : Mu.return_type) subst state =
-  let@@ () = Csymex.with_loc ~loc:(fst ret_ty.ret_info) in
+let produce_return_type (ret_ty : Mu.return_type) : unit Producer.t =
+  let open Producer_and_syntax in
+  let@ () = with_loc ~loc:(fst ret_ty.ret_info) in
   [%l.trace "@[Producing post condition:@ %a@]" Mu.pp_return_type ret_ty];
   let rsym, bty = ret_ty.ret in
-  let* r = Core_value.nondet_bt bty in
-  let subst = Subst.add rsym r subst in
-  fold_list ret_ty.logic ~f:produce_logical_arg ~init:(subst, state)
+  let*^ r = Core_value.nondet_bt bty in
+  let* () = Subst.add rsym r in
+  Producer.iter_list ret_ty.logic ~f:produce_logical_arg
 
 let consume_pure (subst, state) (annot : annot) =
   let (IT (_, _, loc)) = annot in
