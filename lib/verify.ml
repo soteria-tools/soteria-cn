@@ -134,7 +134,7 @@ let verify_prog ~fuel ?only (prog : Mu.file) : (unit, string) Result.t =
       else
         match decl with
         | Proc { trusted = Checked; args; return_type; body; labels; loc } ->
-            Fmt.pr "Verifying function %a...\n" Sym.pp_hum name;
+            Fmt.pr "Verifying function %a...\n@?" Sym.pp_hum name;
             let name_str = name_of name in
             let has_bugs = ref false in
             verify_fn ~fuel ~loc name args return_type labels body
@@ -143,7 +143,7 @@ let verify_prog ~fuel ?only (prog : Mu.file) : (unit, string) Result.t =
                 if not (Compo_res.is_ok r) then has_bugs := true);
             if not !has_bugs then
               Fmt.pr "%a\n" Soteria.Logs.Printers.pp_ok
-                (Fmt.str "Successfully verified %a" Sym.pp_hum name)
+                (Fmt.str "Successfully verified %a@?" Sym.pp_hum name)
         | Proc { trusted = Trusted loc; _ } ->
             L.info (fun m ->
                 m "Skipping trusted function %a (%a)" Sym.pp_hum name pp_loc loc)

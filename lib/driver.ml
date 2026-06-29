@@ -93,7 +93,7 @@ let show_mucore config c_config file =
   let@ () = initialise ~soteria_config:config Whole_program c_config in
   let mucore_file = Frontend.load_mucore_ast file in
   let umucore = Usable_mucore.of_mucore mucore_file in
-  Fmt.pr "%a@." Usable_mucore.pp_file umucore;
+  Fmt.pr "%a@.@?" Usable_mucore.pp_file umucore;
   Ok ()
 
 (* Compositionally verify CN function specifications. [functions] optionally
@@ -138,7 +138,7 @@ let exec_main (config : Soteria.Config.t) c_config fuel file =
   List.iter
     (function
       | Compo_res.Ok (v, _), _ ->
-          Fmt.pr "Successfully finished with %a@\n" Core_value.pp v
+          Fmt.pr "Successfully finished with %a@\n@?" Core_value.pp v
       | Error (Soteria.Symex.Or_gave_up.E ((err, call_trace), _st)), _ ->
           has_errors := true;
           Verify.print_diagnostic ~fid:"main" ~call_trace ~error:err
@@ -150,5 +150,5 @@ let exec_main (config : Soteria.Config.t) c_config fuel file =
     results;
   if !has_errors then Error "Didn't finish"
   else (
-    Fmt.pr "Finished without errors!";
+    Fmt.pr "Finished without errors!@?";
     Ok ())

@@ -101,15 +101,17 @@ module M (Symex : Symex.Base) = struct
 
     let consume' name ins =
       let* state = get_state () in
-      let rec find_and_remove = function
+
+      let rec find_and_remove acc = function
         | [] -> Result.miss_no_fix ~reason:"Missing predicate" ()
-        | (n, i, o) :: rest
+        | ((n, i, o) as p) :: rest
           when Name.compare n name = 0 && List.compare_lengths i ins = 0 ->
             let*^ eq = sure_list_eq i ins in
-            if eq then Result.ok (o, rest) else find_and_remove rest
-        | _ :: rest -> find_and_remove rest
+            if eq then Result.ok (o, List.rev_append acc rest)
+            else find_and_remove (p :: acc) rest
+        | p :: rest -> find_and_remove (p :: acc) rest
       in
-      let** outs, new_state = find_and_remove (of_opt state) in
+      let** outs, new_state = find_and_remove [] (of_opt state) in
       let+ () = set_state (to_opt new_state) in
       Compo_res.Ok outs
 
