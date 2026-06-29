@@ -1,25 +1,31 @@
-# This document catalogues the limitations of Core/Mucore I have found
+# Limitations of Core + CN for performances
+
+This document catalogues limitations to do with either the current version of Core,
+or the current version of the CN assertion syntax that makes reasoning or optimisations
+harder to implement.
 
 ## Short circuiting
 
 In code like this, I expect to have only 3 branches of execution, following the
 shape of the program (`min3.c` from the CN tutorial):
 ```c
-if (x <= y && x <= z) {
-    return x;
-}
-else if (y <= x && y <= z) {
-    return y; // fixed
-}
-else {
-    return z;
+int min3(int x, int y, int z) {
+  if (x <= y && x <= z) {
+      return x;
+  }
+  else if (y <= x && y <= z) {
+      return y; // fixed
+  }
+  else {
+      return z;
+  }
 }
 ```
 
 However, the semantics of C is such that, in the first condition for instance,
 the comparison `x <= z` isn't computed if `x <= y` doesn't hold (`&&` is
 short-circuiting). A direct consequence is that the corresponding Core code
-corresponds to the following:
+behaves like the following:
 ```ocaml
 if x <= y then
   if x <= z then 
@@ -346,3 +352,34 @@ written in the program, against what if/else comes from the compilation of some 
 This makes verification heuristics harder to implement, because I don't know that
 the user's program explicity branches on a certain value, and therefore I should
 figure out if I have matching predicates that should be unfolded as well.
+
+
+## Creation of new symbols for *every* out parameter
+
+In most SL-based tools, I can write something like:
+```c
+void set_to_zero(int* x, int* y)
+   /*@ requires x -> ?v * y -> ?v'
+       ensures  x -> 0 * y -> 0 *@/
+{ ... }
+```
+
+In CN, however, I have to write:
+```c
+void set_to_zero(int* x, int* y)
+/*@ requires: take v1 = W<int>(x);
+              take v2 = W<int>(y);
+    ensures:  take v3 = RW<int>(x);
+              take v4 = RW<int>(y);
+              v3 == 0;
+              v4 == 0; @*/
+{ ... }
+```
+
+While in theory these are equivalent, the latter forces the creation of a two additional intermediate variables (v3 and v4).
+Without further pre-processing (which would be soundness sensitive and probably ill-advised), I don't see a way to avoid this indirection,
+which can be costly to the solver.
+
+At the same time, this syntax is very nice, but it is to be taken into account. It means the engine perfs need to be particularly resilient to variable aliasing.
+Soteria already does quite a lot on this side, but does not anticipate this much aliasing, so we can still improve performance on that side, I believe quite drastically.
+
