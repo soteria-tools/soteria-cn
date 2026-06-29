@@ -9,7 +9,7 @@ open Mu
 module Predicates = Predicates.M (Csymex)
 
 module SState = struct
-  include Soteria_c_lib.State
+  include Soteria_c_lib.State_variants.Lazy
 
   let consume_owned ptr ty : (Core_value.t, _, _) SM.Result.t =
     let open SM.Syntax in
@@ -61,7 +61,7 @@ module PState =
       let pp = pp_hum
     end)
     (Core_value)
-    (State)
+    (SState)
 
 include PState
 
