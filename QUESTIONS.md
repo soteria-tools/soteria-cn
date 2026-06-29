@@ -58,9 +58,6 @@ type t =
 }
 ```
 
--> Fix this in Usable_mucore.ml
+## LogicalArgumentType vs arguments_l?
 
-## LogicalArgumentType vs arguments_l????
-
-They're the same thing but duplicated?
-Literally the exact same definition?
+They're the exact same definition but duplicated?

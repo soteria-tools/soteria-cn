@@ -338,12 +338,11 @@ Best-effort abstraction in the interpreter requires the abstraction to exist
 in the interpreted language. By using an IL such as that already discarded the
 abstraction, such as Core in its current design, I yield the ability to do these
 optimisations.
-
 In a sense, the inability to detect short-circuiting is also an example of
 missing abstractions in Core.
 
-Best effort abstraction is the 50% of reason why I wanted to create Soteria
-and get rid of the "intermediate language to rule them all".
+-> **Kayvan** said that it should be possible to surface to the Core code when
+addresses are taken, and therefore when allocation can be delayed to.
 
 ## Heuristics
 
@@ -352,6 +351,7 @@ written in the program, against what if/else comes from the compilation of some 
 This makes verification heuristics harder to implement, because I don't know that
 the user's program explicity branches on a certain value, and therefore I should
 figure out if I have matching predicates that should be unfolded as well.
+For the current proofs, that seems ok.
 
 
 ## Creation of new symbols for *every* out parameter
@@ -376,10 +376,14 @@ void set_to_zero(int* x, int* y)
 { ... }
 ```
 
-While in theory these are equivalent, the latter forces the creation of a two additional intermediate variables (v3 and v4).
-Without further pre-processing (which would be soundness sensitive and probably ill-advised), I don't see a way to avoid this indirection,
-which can be costly to the solver.
+While in theory these are equivalent, the latter forces the creation of a two
+additional intermediate variables (v3 and v4). Without further pre-processing
+(which would be soundness sensitive and probably ill-advised), I don't see a
+way to avoid this indirection, which can be costly to the solver.
 
-At the same time, this syntax is very nice, but it is to be taken into account. It means the engine perfs need to be particularly resilient to variable aliasing.
-Soteria already does quite a lot on this side, but does not anticipate this much aliasing, so we can still improve performance on that side, I believe quite drastically.
+At the same time, this syntax is very nice, but it is to be taken into account.
+It means the engine perfs need to be particularly resilient to variable aliasing.
+Soteria already does quite a lot on this side, but does not anticipate this much
+aliasing, so we can still improve performance on that side,
+I believe quite drastically.
 
