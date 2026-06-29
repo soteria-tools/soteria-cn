@@ -17,6 +17,7 @@
    35 | |    }
       | \----' 1: Verifying function
    36 |      
+  Verifying function min3_invalid_code...
   error: Null pointer dereference in min3_invalid_code
       --> min3.c:47:16
    36 |    
@@ -32,6 +33,7 @@
    53 |    
 
   $ soteria-cn verify leak.c -v
+  Verifying function to_verify...
   warning: Memory leak in to_verify
       --> leak.c:5:1
     4 |      
@@ -64,6 +66,7 @@
       | \-|  ' 1: Verifying function
       |   \--^ Memory leftover after this function
    20 |      
+  Verifying function read_invalid...
   error: Null pointer dereference in read_invalid
       --> read.c:24:10
    20 |    
@@ -128,6 +131,7 @@
    29 | |  }
       | \--' 1: Verifying function
    30 |    
+  Verifying function transpose_wrong2...
   error: `Lfail ((V|3| == V|4|)) in transpose_wrong2
       --> transpose.c:34:13
    30 |    
@@ -174,3 +178,27 @@
   Successfully verified incr2
   Verifying function call_both_better...
   Successfully verified call_both_better
+
+  $ soteria-cn verify lists.c
+  Verifying function empty_list...
+  Successfully verified empty_list
+  Verifying function prepend...
+  Successfully verified prepend
+  Verifying function free_list...
+  Successfully verified free_list
+  Verifying function slcopy...
+  Successfully verified slcopy
+  Verifying function slappend...
+  Successfully verified slappend
+  Verifying function length...
+  Successfully verified length
+  Verifying function test1...
+  Successfully verified test1
+  Verifying function test2...
+  Successfully verified test2
+  Verifying function test3...
+  Successfully verified test3
+  Verifying function test4...
+  Successfully verified test4
+  Verifying function test5...
+  Successfully verified test5
