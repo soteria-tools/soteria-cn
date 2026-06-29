@@ -70,6 +70,7 @@ let eval_tconst : Cn.Terms.const -> Core_value.t = function
       let i = Typed.BitVec.mk_masked 128 z in
       Obj (Core_value.Int i)
   | Bool b -> Core_value.Bool.of_bool b
+  | Null -> Obj (Core_value.Ptr Typed.Ptr.null)
   | _ -> raise Not_impl_const
 
 let rec eval_annot (subst : t) (annot : annot) : Core_value.t =
