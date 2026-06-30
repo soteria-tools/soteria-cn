@@ -356,3 +356,63 @@ void test3 (DLL* a, DLL* b, DLL* c, DLL* d, DLL* e, DLL* f)
   free_dll(e);                    // (62) e: 0
   free_dll(f);                    // (63) f: 0
 }
+
+// Symbolic test: the three lists are handed in already built, with unknown
+// (symbolic) lengths LA, LB, LC. We run ~20 operations and check that the
+// running lengths track the symbolic inputs (e.g. after prepending three
+// nodes onto a, its length is LA + 3). There is no append for these lists, so
+// growth is all prepend. Finally everything is freed.
+void test4 (DLL* a, DLL* b, DLL* c)
+/*@ requires take LA = DLList(a);
+             take LB = DLList(b);
+             take LC = DLList(c);
+    ensures  take Qa = DLList(a);
+             take Qb = DLList(b);
+             take Qc = DLList(c);
+             Qa == 0u32;
+             Qb == 0u32;
+             Qc == 0u32;
+@*/
+{
+  // --- Observe the symbolic starting lengths ---
+  unsigned int la0 = length(a);   // (1)
+  unsigned int lb0 = length(b);   // (2)
+  unsigned int lc0 = length(c);   // (3)
+  /*@ assert (la0 == LA); @*/
+  /*@ assert (lb0 == LB); @*/
+  /*@ assert (lc0 == LC); @*/
+
+  // --- Grow a by three ---
+  prepend(1, a);                  // (4)  a: LA + 1
+  prepend(2, a);                  // (5)  a: LA + 2
+  prepend(3, a);                  // (6)  a: LA + 3
+  unsigned int la1 = length(a);   // (7)
+  /*@ assert (la1 == LA + 3u32); @*/
+
+  // --- Grow b by one ---
+  prepend(4, b);                  // (8)  b: LB + 1
+  unsigned int lb1 = length(b);   // (9)
+  /*@ assert (lb1 == LB + 1u32); @*/
+
+  // --- Grow c by two ---
+  prepend(5, c);                  // (10) c: LC + 1
+  prepend(6, c);                  // (11) c: LC + 2
+  unsigned int lc1 = length(c);   // (12)
+  /*@ assert (lc1 == LC + 2u32); @*/
+
+  // --- A second round of prepends across all three ---
+  prepend(7, a);                  // (13) a: LA + 4
+  prepend(8, b);                  // (14) b: LB + 2
+  prepend(9, c);                  // (15) c: LC + 3
+  unsigned int la2 = length(a);   // (16)
+  unsigned int lb2 = length(b);   // (17)
+  unsigned int lc2 = length(c);   // (18)
+  /*@ assert (la2 == LA + 4u32); @*/
+  /*@ assert (lb2 == LB + 2u32); @*/
+  /*@ assert (lc2 == LC + 3u32); @*/
+
+  // --- Free everything ---
+  free_dll(a);                    // (19) a: 0
+  free_dll(b);                    // (20) b: 0
+  free_dll(c);                    // (21) c: 0
+}

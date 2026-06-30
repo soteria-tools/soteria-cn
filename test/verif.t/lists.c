@@ -398,3 +398,69 @@ void test5 (SLL* a, SLL* b, SLL* c, SLL* d, SLL* e, SLL* f)
   free_list(f);                   // (60) f: 0
 }
 
+// Symbolic test: the three lists are handed in already built, with unknown
+// (symbolic) lengths LA, LB, LC. We run ~20 operations and check that the
+// running lengths track the symbolic inputs (e.g. after prepending twice and
+// appending b onto a, a has length LA + LB + 3). Finally everything is freed.
+void test6 (SLL* a, SLL* b, SLL* c)
+/*@ requires take LA = SLList(a);
+             take LB = SLList(b);
+             take LC = SLList(c);
+    ensures  take Qa = SLList(a);
+             take Qb = SLList(b);
+             take Qc = SLList(c);
+             Qa == 0u32;
+             Qb == 0u32;
+             Qc == 0u32;
+@*/
+{
+  // --- Observe the symbolic starting lengths ---
+  unsigned int la0 = length(a);   // (1)
+  unsigned int lb0 = length(b);   // (2)
+  unsigned int lc0 = length(c);   // (3)
+  /*@ assert (la0 == LA); @*/
+  /*@ assert (lb0 == LB); @*/
+  /*@ assert (lc0 == LC); @*/
+
+  // --- Grow a by two ---
+  prepend(1, a);                  // (4)  a: LA + 1
+  prepend(2, a);                  // (5)  a: LA + 2
+  unsigned int la1 = length(a);   // (6)
+  /*@ assert (la1 == LA + 2u32); @*/
+
+  // --- Grow b by one ---
+  prepend(3, b);                  // (7)  b: LB + 1
+  unsigned int lb1 = length(b);   // (8)
+  /*@ assert (lb1 == LB + 1u32); @*/
+
+  // --- Grow c by three ---
+  prepend(4, c);                  // (9)  c: LC + 1
+  prepend(5, c);                  // (10) c: LC + 2
+  prepend(6, c);                  // (11) c: LC + 3
+  unsigned int lc1 = length(c);   // (12)
+  /*@ assert (lc1 == LC + 3u32); @*/
+
+  // --- Fold b into a: a gets (LA+2)+(LB+1), b empties ---
+  slappend(a, b);                 // (13) a: LA + LB + 3, b: 0
+  unsigned int la2 = length(a);   // (14)
+  unsigned int lb2 = length(b);   // (15)
+  /*@ assert (la2 == LA + LB + 3u32); @*/
+  /*@ assert (lb2 == 0u32); @*/
+
+  // --- Fold c into a: a gets (LA+LB+3)+(LC+3), c empties ---
+  slappend(a, c);                 // (16) a: LA + LB + LC + 6, c: 0
+  unsigned int la3 = length(a);   // (17)
+  unsigned int lc2 = length(c);   // (18)
+  /*@ assert (la3 == LA + LB + LC + 6u32); @*/
+  /*@ assert (lc2 == 0u32); @*/
+
+  // --- One last prepend onto the combined list ---
+  prepend(7, a);                  // (19) a: LA + LB + LC + 7
+  unsigned int la4 = length(a);   // (20)
+  /*@ assert (la4 == LA + LB + LC + 7u32); @*/
+
+  // --- Free everything (b and c are already empty) ---
+  free_list(a);                   // (21) a: 0
+  free_list(b);                   // (22) b: 0
+  free_list(c);                   // (23) c: 0
+}
